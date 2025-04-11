@@ -1,8 +1,13 @@
 # ktbus
+
 A simple EventBus implementation based on Kotlin SharedFlow and inspired by 
 [Greenrobot EventBus](https://github.com/greenrobot/EventBus).
 
-# Usage
+## Build
+
+![Github Action](https://github.com/holance/ktbus/actions/workflows/ci.yml/badge.svg)
+
+## Usage
 
 Getting started:
 
