@@ -15,6 +15,7 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import java.lang.reflect.InvocationTargetException
 import java.lang.reflect.Method
 import kotlin.reflect.KClass
 import kotlin.reflect.KFunction
@@ -91,7 +92,7 @@ class KtBus {
         private val defaultScope = CoroutineScope(Dispatchers.Default)
         private val ioScope = CoroutineScope(Dispatchers.IO)
         private val unconfinedScope = CoroutineScope(Dispatchers.Unconfined)
-        private var logger: Logger = object : Logger {
+        private val dummyLogger = object : Logger {
             override fun debug(message: String) {
             }
 
@@ -108,9 +109,17 @@ class KtBus {
             }
         }
 
+        private var logger: Logger = dummyLogger
+
+        var traceFunctionInvocation = false
+
         @Suppress("unused")
         fun setLogger(logger: Logger) {
             this.logger = logger
+        }
+
+        fun resetLogger() {
+            logger = dummyLogger
         }
 
         private val eventBus = KtBus()
@@ -130,6 +139,7 @@ class KtBus {
         fun releaseId(id: Int) {
             queue.addLast(id)
         }
+
         @Suppress("unused")
         fun clear() {
             queue.clear()
@@ -156,10 +166,17 @@ class KtBus {
         ) {
             private val mutex: Mutex = Mutex()
 
-            suspend fun add(onEvent: (T) -> Unit): Int {
+            suspend fun add(onEvent: (T) -> Unit, source: String): Int {
                 val job = scope.launch {
                     events.collect { event ->
-                        onEvent(event)
+                        try {
+                            if (traceFunctionInvocation) {
+                                logger.debug("Invoking event handler [$source]: ${event?.javaClass?.simpleName}")
+                            }
+                            onEvent(event)
+                        } catch (e: Exception) {
+                            logger.error("Exception in event handler [$source]: $e")
+                        }
                     }
                 }
                 mutex.withLock {
@@ -203,6 +220,9 @@ class KtBus {
         }
 
         suspend fun post(event: T, removeStickyEvent: Boolean = true) {
+            if (traceFunctionInvocation) {
+                logger.debug("Posting event: ${event?.javaClass?.simpleName}")
+            }
             _events.emit(event)
             if (removeStickyEvent) {
                 removeStickyEvent()
@@ -219,13 +239,14 @@ class KtBus {
 
         fun subscribe(
             scope: CoroutineScope,
-            onEvent: (T) -> Unit
+            onEvent: (T) -> Unit,
+            source: String
         ): SubscriptionId {
             val deferred = subscriptionScope.async {
                 mutex.withLock {
                     val subscriberSet =
                         subscribers.getOrPut(scope) { Subscriptions(events, scope) }
-                    return@withLock subscriberSet.add(onEvent)
+                    return@withLock subscriberSet.add(onEvent, source)
                 }
             }
             val id: SubscriptionId = deferred.getCompleted()
@@ -328,16 +349,30 @@ class KtBus {
                 DispatcherTypes.IO -> ioScope
                 DispatcherTypes.Unconfined -> unconfinedScope
             }
-            subscribe(returnType, obj, channel, { event -> method.invoke(obj, event) }, scope)
+            val source = "${clazz.simpleName}.${method.name}"
+            subscribe(
+                returnType,
+                obj,
+                channel,
+                { event ->
+                    try {
+                        method(obj, event)
+                    } catch (e: InvocationTargetException) {
+                        throw e.targetException
+                    }
+                },
+                scope,
+                source
+            )
         }
     }
 
     private fun <T : Any> subscribe(
         clazz: Class<T>, obj: Any, channel: String, onEvent: (T) -> Unit,
-        scope: CoroutineScope,
+        scope: CoroutineScope, source: String
     ) {
         val handler = createOrGetHandler(clazz, channel)
-        val id = handler.subscribe(scope, onEvent)
+        val id = handler.subscribe(scope, onEvent, source)
         objectHandlerMapping[obj]?.add(FunctionInfo(id, channel, scope, clazz))
     }
 
