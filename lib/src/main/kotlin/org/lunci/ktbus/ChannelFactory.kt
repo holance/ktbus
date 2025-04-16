@@ -5,7 +5,7 @@ interface ChannelFactory {
 }
 
 // Default implementation
-class DefaultChannelFactory : ChannelFactory {
+sealed class DefaultChannelFactory : ChannelFactory {
     companion object {
         const val DEFAULT_CHANNEL = ""
     }
