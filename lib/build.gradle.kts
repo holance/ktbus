@@ -39,6 +39,10 @@ testing {
     }
 }
 
+tasks.jar {
+    archiveFileName = "ktbus.jar" // Replace with your desired filename.
+}
+
 tasks.test {
     useJUnitPlatform()
 }
