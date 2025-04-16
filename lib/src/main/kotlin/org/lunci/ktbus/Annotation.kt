@@ -7,5 +7,6 @@ import kotlin.reflect.KClass
 @Target(AnnotationTarget.FUNCTION)
 annotation class Subscribe(
     val scope: DispatcherTypes = DispatcherTypes.Unconfined,
+    val channel: String = DefaultChannelFactory.DEFAULT_CHANNEL,
     val channelFactory: KClass<out ChannelFactory> = DefaultChannelFactory::class
 )
