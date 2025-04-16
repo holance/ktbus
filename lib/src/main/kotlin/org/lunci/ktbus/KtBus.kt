@@ -4,6 +4,7 @@
 package org.lunci.ktbus
 
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
@@ -12,49 +13,23 @@ import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.yield
 import java.lang.reflect.InvocationTargetException
 import java.lang.reflect.Method
+import java.util.concurrent.ConcurrentHashMap
 import kotlin.reflect.KClass
 import kotlin.reflect.KFunction
 import kotlin.reflect.full.createInstance
 import kotlin.reflect.full.isSubclassOf
 import kotlin.reflect.jvm.kotlinFunction
-
-interface Logger {
-    fun debug(message: String)
-    fun error(message: String)
-    fun info(message: String)
-    fun warning(message: String)
-    fun verbose(message: String)
-
-    @Suppress("unused")
-    fun d(message: String) {
-        debug(message)
-    }
-
-    @Suppress("unused")
-    fun e(message: String) {
-        error(message)
-    }
-
-    @Suppress("unused")
-    fun i(message: String) {
-        info(message)
-    }
-
-    @Suppress("unused")
-    fun w(message: String) {
-        warning(message)
-    }
-
-    @Suppress("unused")
-    fun v(message: String) {
-        verbose(message)
-    }
-}
+import kotlin.time.Duration
+import kotlin.time.Duration.Companion.seconds
 
 typealias SubscriptionId = Int
 
@@ -65,28 +40,13 @@ enum class DispatcherTypes {
     Unconfined
 }
 
-interface ChannelFactory {
-    fun createChannel(obj: Any): String
-}
-
-// Default implementation
-class DefaultChannelFactory : ChannelFactory {
-    companion object {
-        const val DEFAULT_CHANNEL = ""
-    }
-
-    override fun createChannel(obj: Any): String = DEFAULT_CHANNEL
-}
-
-@Retention(AnnotationRetention.RUNTIME)
-@Target(AnnotationTarget.FUNCTION)
-annotation class Subscribe(
-    val scope: DispatcherTypes = DispatcherTypes.Unconfined,
-    val channelFactory: KClass<out ChannelFactory> = DefaultChannelFactory::class
-)
-
 @Suppress("unused")
 class KtBus {
+    /**
+     * Companion object for managing global configurations and utilities related to the event bus.
+     *
+     * This object provides access to different coroutine scopes, a logger, and the central event bus instance.
+     */
     companion object {
         private val mainScope = CoroutineScope(Dispatchers.Main)
         private val defaultScope = CoroutineScope(Dispatchers.Default)
@@ -110,10 +70,12 @@ class KtBus {
         }
 
         private var logger: Logger = dummyLogger
-
+        private val eventBus = KtBus()
         var traceFunctionInvocation = false
+        fun getDefault(): KtBus {
+            return eventBus
+        }
 
-        @Suppress("unused")
         fun setLogger(logger: Logger) {
             this.logger = logger
         }
@@ -121,15 +83,9 @@ class KtBus {
         fun resetLogger() {
             logger = dummyLogger
         }
-
-        private val eventBus = KtBus()
-
-        @Suppress("unused")
-        fun getDefault(): KtBus {
-            return eventBus
-        }
     }
 
+    // region Private classes
     private class IdGen {
         private val queue = ArrayDeque<Int>()
         fun getId(): Int? {
@@ -157,7 +113,6 @@ class KtBus {
         bufferCapacity: Int = 1,
         onBufferOverflow: BufferOverflow = BufferOverflow.DROP_OLDEST
     ) : IEventHandler {
-
         private class Subscriptions<T>(
             val events: SharedFlow<T>,
             val scope: CoroutineScope,
@@ -211,7 +166,7 @@ class KtBus {
             extraBufferCapacity = bufferCapacity,
             onBufferOverflow = onBufferOverflow
         )
-        private val events get() = _events.asSharedFlow()
+        val events get() = _events.asSharedFlow()
         private val mutex: Mutex = Mutex()
         private val subscriptionScope = unconfinedScope
 
@@ -279,25 +234,147 @@ class KtBus {
         val scope: CoroutineScope,
         val clazz: Class<*>
     )
+    //endregion
 
-    private val handlers = mutableMapOf<Class<*>, MutableMap<String, IEventHandler>>()
+    // region Private properties
+    private val handlers = ConcurrentHashMap<Class<*>, ConcurrentHashMap<String, IEventHandler>>()
     private val objectHandlerMapping =
-        mutableMapOf<Any, MutableList<FunctionInfo>>()
-    private val postScope = unconfinedScope
+        ConcurrentHashMap<Any, MutableList<FunctionInfo>>()
+    //endregion
 
-    fun <T : Any> post(event: T, channel: String = DefaultChannelFactory.DEFAULT_CHANNEL) {
+    // region Private functions
+    private fun <T : Any> getOrCreateHandler(clazz: Class<T>, channel: String): EventHandler<T> {
+        val chHandlers = handlers.getOrPut(clazz) {
+            ConcurrentHashMap<String, IEventHandler>()
+        }
+        return chHandlers.getOrPut(channel) {
+            EventHandler<T>(clazz.simpleName)
+        } as EventHandler<T>
+    }
+
+    private fun <T : Any> getHandler(clazz: Class<T>, channel: String): EventHandler<T>? {
+        val chHandlers = handlers.getOrDefault(clazz, null) ?: return null
+        return chHandlers.getOrDefault(channel, null) as EventHandler<T>
+    }
+
+    private fun Method.checkMethodSignature(): Class<*>? {
+        // Check if the method is a Kotlin function
+        val kFunction = kotlinFunction ?: return null
+
+        // Check for the correct number of parameters
+        if (parameterTypes.size != 1) {
+            return null
+        }
+
+        // Check if the return type is Unit
+        if (kFunction.returnType.classifier != Unit::class) {
+            return null
+        }
+
+        // Get the type of the Any parameter
+        return parameterTypes[0]
+    }
+
+    private fun <T : Any> subscribe(
+        clazz: Class<T>, obj: Any, channel: String, onEvent: (T) -> Unit,
+        scope: CoroutineScope, source: String
+    ) {
+        val handler = getOrCreateHandler(clazz, channel)
+        val id = handler.subscribe(scope, onEvent, source)
+        objectHandlerMapping[obj]?.add(FunctionInfo(id, channel, scope, clazz))
+    }
+
+    private fun <T : Any> unsubscribe(
+        clazz: Class<T>,
+        channel: String,
+        id: SubscriptionId,
+        scope: CoroutineScope
+    ) {
+        val handler = getHandler(clazz, channel)
+        handler?.unsubscribe(scope, id)
+    }
+
+    // endregion
+
+    // region Public functions
+    fun <T : Any> post(
+        event: T,
+        channel: String = DefaultChannelFactory.DEFAULT_CHANNEL,
+        scope: CoroutineScope = unconfinedScope
+    ) {
+        scope.launch { postAsync(event, channel) }
+    }
+
+    suspend fun <T : Any> postAsync(
+        event: T,
+        channel: String = DefaultChannelFactory.DEFAULT_CHANNEL
+    ) {
         val clazz = event::class.java
         val handler = getHandler(clazz, channel) ?: return
-        postScope.launch {
-            (handler as EventHandler<T>).post(event)
+        (handler as EventHandler<T>).post(event)
+    }
+
+    fun <T : Any> postSticky(
+        event: T,
+        channel: String = DefaultChannelFactory.DEFAULT_CHANNEL,
+        scope: CoroutineScope = unconfinedScope
+    ) {
+        scope.launch {
+            postStickyAsync(event)
         }
     }
 
-    fun <T : Any> postSticky(event: T, channel: String = DefaultChannelFactory.DEFAULT_CHANNEL) {
+    suspend fun <T : Any> postStickyAsync(
+        event: T,
+        channel: String = DefaultChannelFactory.DEFAULT_CHANNEL
+    ) {
         val clazz = event::class.java
-        val handler = createOrGetHandler(clazz, channel) as EventHandler<T>
-        postScope.launch {
-            handler.postSticky(event)
+        val handler = getOrCreateHandler(clazz, channel) as EventHandler<T>
+        handler.postSticky(event)
+    }
+
+    fun <T : Any, E : Any> request(
+        event: T,
+        onResult: (RequestResult<E>) -> Unit,
+        channel: String = DefaultChannelFactory.DEFAULT_CHANNEL,
+        timeout: Duration = 5.seconds,
+        scope: CoroutineScope = unconfinedScope
+    ) {
+        scope.launch {
+            requestAsync(event, onResult, channel, timeout)
+        }
+    }
+
+    suspend fun <T : Any, E : Any> requestAsync(
+        event: T,
+        onResult: (RequestResult<E>) -> Unit,
+        channel: String = DefaultChannelFactory.DEFAULT_CHANNEL,
+        timeout: Duration = 5.seconds
+    ) {
+        val requestEvent = RequestEvent<T, E>(data = event, bus = this, channel = channel)
+        val responseClass: Class<ResponseEvent<E>> =
+            ResponseEvent::class.java as Class<ResponseEvent<E>>
+        val handler =
+            getOrCreateHandler<ResponseEvent<E>>(responseClass, channel)
+        val responseListenerJob: Deferred<ResponseEvent<E>> =
+            unconfinedScope.async {
+                handler.events.filter {
+                    it.correlationId == requestEvent.requestId
+                }.first()
+            }
+
+        yield()
+        post(requestEvent, channel)
+
+        val resultEvent = withTimeoutOrNull(timeout) {
+            responseListenerJob.await()
+        }
+        if (resultEvent?.data != null) {
+            onResult(RequestResult.Success(resultEvent.data))
+        } else if (resultEvent?.error != null) {
+            onResult(RequestResult.Error(resultEvent.error))
+        } else {
+            onResult(RequestResult.Timeout)
         }
     }
 
@@ -309,30 +386,45 @@ class KtBus {
         handler?.removeStickyEvent()
     }
 
-    private fun checkMethodSignature(method: Method): Class<*>? {
-        // Check if the method is a Kotlin function
-        val kFunction = method.kotlinFunction ?: return null
-
-        // Check for the correct number of parameters
-        if (method.parameterTypes.size != 1) {
-            return null
-        }
-
-        // Check if the return type is Unit
-        if (kFunction.returnType.classifier != Unit::class) {
-            return null
-        }
-
-        // Get the type of the Any parameter
-        return method.parameterTypes[0]
-    }
-
+    /**
+     * Subscribes an object to receive events.
+     *
+     * This function registers an object (typically a class representing a subscriber)
+     * to receive events. It scans the object's methods for those annotated with `@Subscribe`
+     * and registers them to handle events of the specified types on the defined channels.
+     *
+     * **Requirements:**
+     *  - The provided `obj` must be a `KClass<*>` (Kotlin class object).
+     *  - Methods annotated with `@Subscribe` must have a valid signature (one parameter).
+     *
+     * **Behavior:**
+     *  - It first checks if the given class object is already registered. If it is, a warning
+     *    is logged, and the function returns without doing anything.
+     *  - If the class is not already registered, it iterates through all the declared methods
+     *    of the class.
+     *  - For each method, it checks if it's annotated with `@Subscribe`.
+     *  - If a method is annotated, it extracts information from the annotation:
+     *      - `channelFactory`: Specifies the factory class used to create the channel for the event.
+     *      - `scope`: Specifies the coroutine dispatcher on which the method should be executed.
+     *  - It creates a channel instance using the provided factory class.
+     *  - It validates the method signature to ensure it accepts exactly one argument.
+     *  - It determines the appropriate coroutine scope based on the `scope` specified in the annotation.
+     *  - It then registers the method to receive events of the specified type on the created channel.
+     *
+     * **Logging:**
+     *  - A warning is logged if an object is already registered.
+     *
+     * **Error Handling:**
+     *  - `IllegalArgumentException` is thrown if the provided object is not a `KClass<*>`.
+     *  - Any exception thrown by the subscribed method will be propagated by reflection.
+     *
+     * @param obj The class object (`KClass<*>`) to subscribe.
+     * @throws IllegalArgumentException if the provided object is not a `KClass<*>`.
+     */
     fun subscribe(obj: Any) {
-        if (obj::class.isSubclassOf(KFunction::class)) {
-            throw IllegalArgumentException("Functions are not allowed as arguments.")
-        }
-        if (objectHandlerMapping.contains(obj)) {
-            logger.w("Object [${obj.javaClass.simpleName}] is already registered in EventBus.")
+        require(obj::class != KClass::class) { "Only class instances are allowed as arguments." }
+        if (objectHandlerMapping.containsKey(obj)) {
+            logger.w("Object [${obj::class.simpleName}] is already registered in EventBus.")
             return
         }
         objectHandlerMapping[obj] = mutableListOf()
@@ -342,7 +434,7 @@ class KtBus {
             val factoryClass = annotation.channelFactory
             val factory = factoryClass.createInstance()
             val channel = factory.createChannel(obj)
-            val returnType = checkMethodSignature(method) ?: return@forEach
+            val argType = method.checkMethodSignature() ?: return@forEach
             val scope = when (annotation.scope) {
                 DispatcherTypes.Main -> mainScope
                 DispatcherTypes.Default -> defaultScope
@@ -351,7 +443,7 @@ class KtBus {
             }
             val source = "${clazz.simpleName}.${method.name}"
             subscribe(
-                returnType,
+                argType,
                 obj,
                 channel,
                 { event ->
@@ -367,50 +459,22 @@ class KtBus {
         }
     }
 
-    private fun <T : Any> subscribe(
-        clazz: Class<T>, obj: Any, channel: String, onEvent: (T) -> Unit,
-        scope: CoroutineScope, source: String
-    ) {
-        val handler = createOrGetHandler(clazz, channel)
-        val id = handler.subscribe(scope, onEvent, source)
-        objectHandlerMapping[obj]?.add(FunctionInfo(id, channel, scope, clazz))
-    }
 
-    private fun <T : Any> createOrGetHandler(clazz: Class<T>, channel: String): EventHandler<T> {
-        val chHandlers = handlers.getOrPut(clazz) {
-            mutableMapOf<String, IEventHandler>()
-        }
-        return chHandlers.getOrPut(channel) {
-            EventHandler<T>(clazz.simpleName)
-        } as EventHandler<T>
-    }
-
-    private fun <T : Any> getHandler(clazz: Class<T>, channel: String): EventHandler<T>? {
-        val chHandlers = handlers[clazz] ?: return null
-        return chHandlers[channel] as EventHandler<T>
-    }
-
+    /**
+     * Unsubscribes all handlers associated with a given class object.
+     *
+     * This function removes all registered handlers (functions) that were subscribed
+     * using a specific class as the target.
+     *
+     * @param obj The KClass object representing the class whose associated handlers should be unsubscribed.
+     * @throws IllegalArgumentException if the provided argument is not a KClass object.
+     */
     fun unsubscribe(obj: Any) {
-        if (obj::class.isSubclassOf(KFunction::class)) {
-            throw IllegalArgumentException("Functions are not allowed as arguments.")
-        }
-        if (!objectHandlerMapping.contains(obj)) {
-            return
-        }
-        val functions = objectHandlerMapping[obj] ?: return
+        require(obj::class != KClass::class) { "Only class instances are allowed as arguments." }
+        val functions = objectHandlerMapping.remove(obj) ?: return
         functions.forEach { function ->
             unsubscribe(function.clazz, function.channel, function.id, function.scope)
         }
-        objectHandlerMapping.remove(obj)
     }
-
-    private fun <T : Any> unsubscribe(
-        clazz: Class<T>,
-        channel: String,
-        id: SubscriptionId,
-        scope: CoroutineScope
-    ) {
-        val handler = getHandler(clazz, channel)
-        handler?.unsubscribe(scope, id)
-    }
+    // endregion
 }

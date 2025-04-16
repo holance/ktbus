@@ -11,8 +11,6 @@
       <option name="taskNames">
         <list>
           <option value=":lib:test" />
-          <option value="--tests" />
-          <option value="&quot;org.lunci.ktbus.*&quot;" />
         </list>
       </option>
       <option name="vmOptions" />
