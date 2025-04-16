@@ -39,9 +39,17 @@ testing {
     }
 }
 
-// Apply a specific Java toolchain to ease working on different environments.
-java {
-    toolchain {
-        languageVersion = JavaLanguageVersion.of(11)
-    }
+tasks.test {
+    useJUnitPlatform()
 }
+
+kotlin {
+    jvmToolchain(11) // Specify your target JVM version
+}
+
+// Apply a specific Java toolchain to ease working on different environments.
+//java {
+//    toolchain {
+//        languageVersion = JavaLanguageVersion.of(11)
+//    }
+//}
