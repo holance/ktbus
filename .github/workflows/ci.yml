@@ -28,3 +28,9 @@ jobs:
 
       - name: Run tests
         run: ./gradlew :lib:test
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: library-artifacts
+          path: lib/build/libs  # Adjust the path if necessary
