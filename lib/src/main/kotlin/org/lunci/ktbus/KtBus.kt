@@ -413,9 +413,12 @@ class KtBus {
         val clazz = obj::class.java
         clazz.declaredMethods.forEach { method ->
             val annotation = method.getAnnotation(Subscribe::class.java) ?: return@forEach
+            var channel = annotation.channel
             val factoryClass = annotation.channelFactory
-            val factory = factoryClass.createInstance()
-            val channel = factory.createChannel(obj)
+            if (factoryClass != DefaultChannelFactory::class) {
+                val factory = factoryClass.createInstance()
+                channel = factory.createChannel(obj)
+            }
             val argType = method.checkMethodSignature() ?: return@forEach
             val scope = when (annotation.scope) {
                 DispatcherTypes.Main -> mainScope
