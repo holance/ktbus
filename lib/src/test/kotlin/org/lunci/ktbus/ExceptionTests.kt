@@ -46,20 +46,20 @@ class KtBusExceptionTests {
 
         fun setup() {
             KtBus.setLogger(object : Logger {
-                override fun debug(message: String) {
+                override fun debug(message: () -> String) {
                 }
 
-                override fun error(message: String) {
-                    errorResult.add(message)
+                override fun info(message: () -> String) {
                 }
 
-                override fun info(message: String) {
+                override fun warning(message: () -> String) {
                 }
 
-                override fun warning(message: String) {
+                override fun error(message: () -> String) {
+                    errorResult.add(message())
                 }
 
-                override fun verbose(message: String) {
+                override fun verbose(message: () -> String) {
                 }
             })
             bus.subscribe(this)

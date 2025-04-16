@@ -24,9 +24,7 @@ import java.lang.reflect.InvocationTargetException
 import java.lang.reflect.Method
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.reflect.KClass
-import kotlin.reflect.KFunction
 import kotlin.reflect.full.createInstance
-import kotlin.reflect.full.isSubclassOf
 import kotlin.reflect.jvm.kotlinFunction
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.seconds
@@ -52,28 +50,12 @@ class KtBus {
         private val defaultScope = CoroutineScope(Dispatchers.Default)
         private val ioScope = CoroutineScope(Dispatchers.IO)
         private val unconfinedScope = CoroutineScope(Dispatchers.Unconfined)
-        private val dummyLogger = object : Logger {
-            override fun debug(message: String) {
-            }
 
-            override fun error(message: String) {
-            }
-
-            override fun info(message: String) {
-            }
-
-            override fun warning(message: String) {
-            }
-
-            override fun verbose(message: String) {
-            }
-        }
-
-        private var logger: Logger = dummyLogger
-        private val eventBus = KtBus()
+        private var logger: Logger? = null
+        private val instance = KtBus()
         var traceFunctionInvocation = false
         fun getDefault(): KtBus {
-            return eventBus
+            return instance
         }
 
         fun setLogger(logger: Logger) {
@@ -81,7 +63,7 @@ class KtBus {
         }
 
         fun resetLogger() {
-            logger = dummyLogger
+            logger = null
         }
     }
 
@@ -108,12 +90,12 @@ class KtBus {
         fun hasSubscribers(): Boolean
     }
 
-    private class EventHandler<T>(
+    private class EventHandler<T : Any>(
         private val typeName: String,
         bufferCapacity: Int = 1,
         onBufferOverflow: BufferOverflow = BufferOverflow.DROP_OLDEST
     ) : IEventHandler {
-        private class Subscriptions<T>(
+        private class Subscriptions<T : Any>(
             val events: SharedFlow<T>,
             val scope: CoroutineScope,
             val idGen: IdGen = IdGen(),
@@ -123,14 +105,14 @@ class KtBus {
 
             suspend fun add(onEvent: (T) -> Unit, source: String): Int {
                 val job = scope.launch {
-                    events.collect { event ->
+                    events.collect { event: T ->
                         try {
                             if (traceFunctionInvocation) {
-                                logger.debug("Invoking event handler [$source]: ${event?.javaClass?.simpleName}")
+                                logger?.d("Invoking event handler [$source]: ${event::class.simpleName}")
                             }
                             onEvent(event)
                         } catch (e: Exception) {
-                            logger.error("Exception in event handler [$source]: $e")
+                            logger?.e("Exception in event handler [$source]: $e")
                         }
                     }
                 }
@@ -161,7 +143,7 @@ class KtBus {
 
         private val subscribers =
             mutableMapOf<CoroutineScope, Subscriptions<T>>()
-        private val _events = MutableSharedFlow<T>(
+        private val _events: MutableSharedFlow<T> = MutableSharedFlow(
             replay = 1,
             extraBufferCapacity = bufferCapacity,
             onBufferOverflow = onBufferOverflow
@@ -171,12 +153,12 @@ class KtBus {
         private val subscriptionScope = unconfinedScope
 
         init {
-            logger.debug("Created event handler for class $typeName")
+            logger?.d("Created event handler for class $typeName")
         }
 
         suspend fun post(event: T, removeStickyEvent: Boolean = true) {
             if (traceFunctionInvocation) {
-                logger.debug("Posting event: ${event?.javaClass?.simpleName}")
+                logger?.d("Posting event: ${event::class.simpleName}")
             }
             _events.emit(event)
             if (removeStickyEvent) {
@@ -205,17 +187,17 @@ class KtBus {
                 }
             }
             val id: SubscriptionId = deferred.getCompleted()
-            logger.debug("Subscribed event to id $id in class $typeName; scope $scope")
+            logger?.d("Subscribed event to id $id in class $typeName; scope $scope")
             return id
         }
 
         fun unsubscribe(scope: CoroutineScope, id: SubscriptionId) {
-            logger.debug("Unsubscribing from id $id in class $typeName; scope $scope")
+            logger?.d("Unsubscribing from id $id in class $typeName; scope $scope")
             val deferred = subscriptionScope.async {
                 mutex.withLock {
                     val subscriberSet = subscribers[scope] ?: return@withLock
                     if (subscriberSet.remove(id)) {
-                        logger.debug("Unsubscribed scope $scope in class $typeName")
+                        logger?.d("Unsubscribed scope $scope in class $typeName")
                         subscribers.remove(scope)
                     }
                 }
@@ -424,7 +406,7 @@ class KtBus {
     fun subscribe(obj: Any) {
         require(obj::class != KClass::class) { "Only class instances are allowed as arguments." }
         if (objectHandlerMapping.containsKey(obj)) {
-            logger.w("Object [${obj::class.simpleName}] is already registered in EventBus.")
+            logger?.w("Object [${obj::class.simpleName}] is already registered in EventBus.")
             return
         }
         objectHandlerMapping[obj] = mutableListOf()

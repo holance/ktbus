@@ -12,8 +12,9 @@ sealed class RequestResult<out R> {
     object Timeout : RequestResult<Nothing>()
 }
 
+@Suppress("unused")
 // Request event - carries data and a unique ID
-internal data class RequestEvent<T, E>(
+data class RequestEvent<T, E>(
     val requestId: String = UUID.randomUUID().toString(), // Unique ID for correlation
     val data: T,
     val bus: KtBus,
