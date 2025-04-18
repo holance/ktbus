@@ -21,13 +21,18 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.yield
+import java.lang.reflect.Method
 import java.util.concurrent.ConcurrentHashMap
+import kotlin.coroutines.resumeWithException
+import kotlin.coroutines.suspendCoroutine
 import kotlin.reflect.KClass
-import kotlin.reflect.*
+import kotlin.reflect.KFunction
+import kotlin.reflect.KParameter
+import kotlin.reflect.full.callSuspend
 import kotlin.reflect.full.createInstance
 import kotlin.reflect.full.declaredMembers
 import kotlin.reflect.full.findAnnotation
-import kotlin.reflect.full.*
+import kotlin.reflect.jvm.javaMethod
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.seconds
 
@@ -153,7 +158,6 @@ class KtBus(val config: KtBusConfig = KtBusConfig()) {
         )
         val events get() = _events.asSharedFlow()
         private val mutex: Mutex = Mutex()
-        private val subscriptionScope = unconfinedScope
 
         init {
             logger?.d("Created event handler for class $typeName")
@@ -182,21 +186,20 @@ class KtBus(val config: KtBusConfig = KtBusConfig()) {
             onEvent: (T) -> Unit,
             source: String
         ): SubscriptionId {
-            val deferred = subscriptionScope.async {
+            return runBlocking {
                 mutex.withLock {
                     val subscriberSet =
                         subscribers.getOrPut(scope) { Subscriptions(events, scope) }
-                    return@withLock subscriberSet.add(onEvent, source)
+                    val id: SubscriptionId = subscriberSet.add(onEvent, source)
+                    logger?.d("Subscribed event to id $id in class $typeName; scope $scope")
+                    id
                 }
             }
-            val id: SubscriptionId = deferred.getCompleted()
-            logger?.d("Subscribed event to id $id in class $typeName; scope $scope")
-            return id
         }
 
         fun unsubscribe(scope: CoroutineScope, id: SubscriptionId) {
             logger?.d("Unsubscribing from id $id in class $typeName; scope $scope")
-            val deferred = subscriptionScope.async {
+            runBlocking {
                 mutex.withLock {
                     val subscriberSet = subscribers[scope] ?: return@withLock
                     if (subscriberSet.remove(id)) {
@@ -205,7 +208,6 @@ class KtBus(val config: KtBusConfig = KtBusConfig()) {
                     }
                 }
             }
-            deferred.getCompleted()
         }
 
         override fun hasSubscribers(): Boolean {
@@ -309,7 +311,7 @@ class KtBus(val config: KtBusConfig = KtBusConfig()) {
         timeout: Duration = 5.seconds,
         scope: CoroutineScope = unconfinedScope
     ) {
-        scope.launch {
+        runBlocking {
             requestAsync(event, onResult, channel, timeout)
         }
     }
@@ -388,7 +390,7 @@ class KtBus(val config: KtBusConfig = KtBusConfig()) {
      *  - Any exception thrown by the subscribed method will be propagated by reflection.
      *
      * @param obj The class object (`KClass<*>`) to subscribe.
-     * @throws IllegalArgumentException if the provided object is not a `KClass<*>`.
+     * @throws IllegalArgumentException if the provided object is not a `KClass<*>` or if the method contains more than one parameter.
      */
     fun subscribe(obj: Any) {
         require(obj::class != KClass::class) { "Only class instances are allowed as arguments." }
@@ -430,14 +432,22 @@ class KtBus(val config: KtBusConfig = KtBusConfig()) {
                     if (method.isSuspend) {
                         scope.launch {
                             try {
-                                method.callSuspend(obj, event)
+                                if (method is KFunction<*> && method.javaMethod != null) {
+                                    invokeSuspendFunction(method.javaMethod!!, obj, event)
+                                } else {
+                                    method.callSuspend(obj, event)
+                                }
                             } catch (e: Throwable) {
                                 logger?.e("Exception in event handler [$source]: $e")
                             }
                         }
                     } else {
                         try {
-                            method.call(obj, event)
+                            if (method is KFunction<*> && method.javaMethod != null) {
+                                method.javaMethod?.invoke(obj, event)
+                            } else {
+                                method.call(obj, event)
+                            }
                         } catch (e: Throwable) {
                             logger?.e("Exception in event handler [$source]: $e")
                         }
@@ -449,6 +459,19 @@ class KtBus(val config: KtBusConfig = KtBusConfig()) {
         }
     }
 
+    suspend fun invokeSuspendFunction(
+        method: Method,
+        obj: Any,
+        event: Any
+    ) {
+        suspendCoroutine<Unit> {
+            try {
+                method.invoke(obj, event, it)
+            } catch (e: Exception) {
+                it.resumeWithException(e)
+            }
+        }
+    }
 
     /**
      * Unsubscribes all handlers associated with a given class object.
