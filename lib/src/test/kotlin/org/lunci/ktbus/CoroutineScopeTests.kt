@@ -7,6 +7,7 @@ import kotlinx.coroutines.withTimeoutOrNull
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
+import kotlin.random.Random
 
 class CoroutineScopeTests {
     val bus = KtBus.getDefault()
@@ -20,7 +21,7 @@ class CoroutineScopeTests {
             bus.post(Event1(i))
         }
         runBlocking {
-            val success = withTimeoutOrNull(5000) {
+            val success = withTimeoutOrNull(10000) {
                 while (tests.any { it.event1Result.size < iteration }) {
                     delay(10)
                 }
@@ -65,7 +66,7 @@ class CoroutineScopeTests {
 
         @Subscribe(scope = DispatcherTypes.IO)
         suspend fun onEvent1(event: Event1) {
-            delay(10)
+            delay(Random.nextLong(1, 20))
             mutex.withLock {
                 event1Result.add(event)
             }
