@@ -7,9 +7,17 @@ A simple EventBus implementation based on Kotlin SharedFlow and inspired by
 
 ![Github Action](https://github.com/holance/ktbus/actions/workflows/ci.yml/badge.svg)
 
-## Usage
+## Concept and Usages
 
-### Basics
+### Publish/Subscribe
+
+```mermaid
+flowchart TD
+A["Publisher"] --> B(("SharedFlow"))
+B --> C["Subscriber 1"] & D["Subscriber 2"]
+```
+
+#### Example
 
 ```kotlin
 data class Event1(val value: Int)
@@ -32,9 +40,9 @@ class SomeClass {
         // Do something with the event
     }
 
-    @Subscribe
+    @Subscribe(scope = DispatcherTypes.IO)
     fun onEvent2(event: Event2) {
-        // Do something with the event
+        // Do something with the event in a IO coroutine scope
     }
 
     @Subscribe
@@ -50,7 +58,18 @@ bus.post(Event2(2))
 bus.post(Event3(3))
 ```
 
+
 ### Request/Response
+
+```mermaid
+flowchart TD
+n1["Request"] --> n2(("SharedFlow"))
+n2 --> n3["Subscriber"]
+n3 -- Response --> n2
+n2 -- Response --> n1
+```
+
+#### Example
 
 ```kotlin
 
