@@ -21,30 +21,36 @@ class KtBusRequestTests {
         test.setup()
         val job = scope.launch {
             for (i in 0 until iteration) {
-                bus.request<Event1, Event2>(Event1(i), { result: RequestResult<Event2> ->
+                bus.request<Event1, Event2>(Event1(i)) { result: Response<Event2> ->
                     when (result) {
-                        is RequestResult.Success -> assertEquals(result.data.value, i + 1)
+                        is Response.Success -> assertEquals(result.data.value, i + 1)
                         else -> fail("Unexpected result type")
                     }
-                })
-                bus.request<Event2, Event3>(Event2(i * 100), { result: RequestResult<Event3> ->
+                }
+                bus.request<Event2, Event3>(Event2(i * 100)) { result: Response<Event3> ->
                     when (result) {
-                        is RequestResult.Success -> assertEquals(result.data.value, i * 100 + 1)
+                        is Response.Success -> assertEquals(result.data.value, i * 100 + 1)
                         else -> fail("Unexpected result type")
                     }
-                })
-                bus.request<Event1, Event2>(Event1(i * 10), { result: RequestResult<Event2> ->
+                }
+                bus.request<Event1, Event2>(
+                    Event1(i * 10),
+                    channel = "test2"
+                ) { result: Response<Event2> ->
                     when (result) {
-                        is RequestResult.Success -> assertEquals(result.data.value, i * 10 + 2)
+                        is Response.Success -> assertEquals(result.data.value, i * 10 + 2)
                         else -> fail("Unexpected result type")
                     }
-                }, "test2")
-                bus.request<Event1, Event2>(Event1(i * 10), { result: RequestResult<Event2> ->
+                }
+                bus.request<Event1, Event2>(
+                    Event1(i * 10),
+                    channel = "test3"
+                ) { result: Response<Event2> ->
                     when (result) {
-                        is RequestResult.Error -> assertEquals(result.message, "Error occurred")
+                        is Response.Error -> assertEquals(result.message, "Error occurred")
                         else -> fail("Unexpected result type")
                     }
-                }, "test3")
+                }
             }
         }
         runBlocking { job.join() }
