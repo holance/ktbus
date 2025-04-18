@@ -66,6 +66,15 @@ class KtBusRequestTests {
             event.setResult(Event3(event.data.value + 1))
         }
 
+        @Subscribe
+        fun onEvent2To3FailSetResult(event: RequestEvent<Event1, Event2>) {
+            val scope = CoroutineScope(Dispatchers.IO)
+            scope.launch {
+                delay(500)
+                assertFalse(event.trySetResult(Event2(event.data.value + 1)))
+            }
+        }
+
         @Subscribe(channel = "test2")
         fun onEventChannel(event: RequestEvent<Event1, Event2>) {
             event.setResult(Event2(event.data.value + 2))

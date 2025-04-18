@@ -16,16 +16,18 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.yield
-import java.lang.reflect.InvocationTargetException
-import java.lang.reflect.Method
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.reflect.KClass
+import kotlin.reflect.*
 import kotlin.reflect.full.createInstance
-import kotlin.reflect.jvm.kotlinFunction
+import kotlin.reflect.full.declaredMembers
+import kotlin.reflect.full.findAnnotation
+import kotlin.reflect.full.*
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.seconds
 
@@ -111,14 +113,10 @@ class KtBus(val config: KtBusConfig = KtBusConfig()) {
             suspend fun add(onEvent: (T) -> Unit, source: String): Int {
                 val job = scope.launch {
                     events.collect { event: T ->
-                        try {
-                            if (traceFunctionInvocation) {
-                                logger?.d("Invoking event handler [$source]: ${event::class.simpleName}")
-                            }
-                            onEvent(event)
-                        } catch (e: Exception) {
-                            logger?.e("Exception in event handler [$source]: $e")
+                        if (traceFunctionInvocation) {
+                            logger?.d("Invoking event handler [$source]: ${event::class.simpleName}")
                         }
+                        onEvent(event)
                     }
                 }
                 mutex.withLock {
@@ -219,51 +217,37 @@ class KtBus(val config: KtBusConfig = KtBusConfig()) {
         val id: SubscriptionId,
         val channel: String,
         val scope: CoroutineScope,
-        val clazz: Class<*>
+        val clazz: KClass<*>
     )
     //endregion
 
     // region Private properties
-    private val handlers = ConcurrentHashMap<Class<*>, ConcurrentHashMap<String, IEventHandler>>()
+    private val handlers = ConcurrentHashMap<KClass<*>, ConcurrentHashMap<String, IEventHandler>>()
     private val objectHandlerMapping =
         ConcurrentHashMap<Any, MutableList<FunctionInfo>>()
     //endregion
 
     // region Private functions
-    private fun <T : Any> getOrCreateHandler(clazz: Class<T>, channel: String): EventHandler<T> {
+    private fun <T : Any> getOrCreateHandler(clazz: KClass<T>, channel: String): EventHandler<T> {
         val chHandlers = handlers.getOrPut(clazz) {
             ConcurrentHashMap<String, IEventHandler>()
         }
         return chHandlers.getOrPut(channel) {
-            EventHandler<T>(clazz.simpleName, config.bufferCapacity, config.onBufferOverflow)
+            EventHandler<T>(
+                clazz.simpleName.toString(),
+                config.bufferCapacity,
+                config.onBufferOverflow
+            )
         } as EventHandler<T>
     }
 
-    private fun <T : Any> getHandler(clazz: Class<T>, channel: String): EventHandler<T>? {
+    private fun <T : Any> getHandler(clazz: KClass<T>, channel: String): EventHandler<T>? {
         val chHandlers = handlers.getOrDefault(clazz, null) ?: return null
         return chHandlers.getOrDefault(channel, null) as EventHandler<T>
     }
 
-    private fun Method.checkMethodSignature(): Class<*>? {
-        // Check if the method is a Kotlin function
-        val kFunction = kotlinFunction ?: return null
-
-        // Check for the correct number of parameters
-        if (parameterTypes.size != 1) {
-            return null
-        }
-
-        // Check if the return type is Unit
-        if (kFunction.returnType.classifier != Unit::class) {
-            return null
-        }
-
-        // Get the type of the Any parameter
-        return parameterTypes[0]
-    }
-
     private fun <T : Any> subscribe(
-        clazz: Class<T>, obj: Any, channel: String, onEvent: (T) -> Unit,
+        clazz: KClass<T>, obj: Any, channel: String, onEvent: (T) -> Unit,
         scope: CoroutineScope, source: String
     ) {
         val handler = getOrCreateHandler(clazz, channel)
@@ -272,7 +256,7 @@ class KtBus(val config: KtBusConfig = KtBusConfig()) {
     }
 
     private fun <T : Any> unsubscribe(
-        clazz: Class<T>,
+        clazz: KClass<T>,
         channel: String,
         id: SubscriptionId,
         scope: CoroutineScope
@@ -289,14 +273,14 @@ class KtBus(val config: KtBusConfig = KtBusConfig()) {
         channel: String = DefaultChannelFactory.DEFAULT_CHANNEL,
         scope: CoroutineScope = unconfinedScope
     ) {
-        scope.launch { postAsync(event, channel) }
+        runBlocking { postAsync(event, channel) }
     }
 
     suspend fun <T : Any> postAsync(
         event: T,
         channel: String = DefaultChannelFactory.DEFAULT_CHANNEL
     ) {
-        val clazz = event::class.java
+        val clazz = event::class
         val handler = getHandler(clazz, channel) ?: return
         (handler as EventHandler<T>).post(event)
     }
@@ -306,16 +290,14 @@ class KtBus(val config: KtBusConfig = KtBusConfig()) {
         channel: String = DefaultChannelFactory.DEFAULT_CHANNEL,
         scope: CoroutineScope = unconfinedScope
     ) {
-        scope.launch {
-            postStickyAsync(event)
-        }
+        runBlocking { postStickyAsync(event, channel) }
     }
 
     suspend fun <T : Any> postStickyAsync(
         event: T,
         channel: String = DefaultChannelFactory.DEFAULT_CHANNEL
     ) {
-        val clazz = event::class.java
+        val clazz = event::class
         val handler = getOrCreateHandler(clazz, channel) as EventHandler<T>
         handler.postSticky(event)
     }
@@ -339,8 +321,8 @@ class KtBus(val config: KtBusConfig = KtBusConfig()) {
         timeout: Duration = 5.seconds
     ) {
         val requestEvent = RequestEvent<T, E>(data = event, bus = this, channel = channel)
-        val responseClass: Class<ResponseEvent<E>> =
-            ResponseEvent::class.java as Class<ResponseEvent<E>>
+        val responseClass: KClass<ResponseEvent<E>> =
+            ResponseEvent::class as KClass<ResponseEvent<E>>
         val handler =
             getOrCreateHandler<ResponseEvent<E>>(responseClass, channel)
         val responseListenerJob: Deferred<ResponseEvent<E>> =
@@ -366,7 +348,7 @@ class KtBus(val config: KtBusConfig = KtBusConfig()) {
     }
 
     fun <T : Any> removeStickyEvent(
-        clazz: Class<T>,
+        clazz: KClass<T>,
         channel: String = DefaultChannelFactory.DEFAULT_CHANNEL
     ) {
         val handler = getHandler(clazz, channel)
@@ -415,16 +397,24 @@ class KtBus(val config: KtBusConfig = KtBusConfig()) {
             return
         }
         objectHandlerMapping[obj] = mutableListOf()
-        val clazz = obj::class.java
-        clazz.declaredMethods.forEach { method ->
-            val annotation = method.getAnnotation(Subscribe::class.java) ?: return@forEach
+        val clazz = obj::class
+        clazz.declaredMembers.forEach { method ->
+            val annotation = method.findAnnotation<Subscribe>() ?: return@forEach
             var channel = annotation.channel
             val factoryClass = annotation.channelFactory
             if (factoryClass != DefaultChannelFactory::class) {
                 val factory = factoryClass.createInstance()
                 channel = factory.createChannel(obj)
             }
-            val argType = method.checkMethodSignature() ?: return@forEach
+            val parameters = method.parameters.filter { it.kind == KParameter.Kind.VALUE }
+            if (parameters.size != 1) {
+                throw IllegalArgumentException("Method ${method.name} must have exactly one parameter.")
+            }
+            val classifier = parameters[0].type.classifier
+            if (classifier !is KClass<*>) {
+                throw IllegalArgumentException("Method ${method.name} parameter must be a class.")
+            }
+            val argType: KClass<*> = classifier
             val scope = when (annotation.scope) {
                 DispatcherTypes.Main -> mainScope
                 DispatcherTypes.Default -> defaultScope
@@ -437,10 +427,20 @@ class KtBus(val config: KtBusConfig = KtBusConfig()) {
                 obj,
                 channel,
                 { event ->
-                    try {
-                        method(obj, event)
-                    } catch (e: InvocationTargetException) {
-                        throw e.targetException
+                    if (method.isSuspend) {
+                        scope.launch {
+                            try {
+                                method.callSuspend(obj, event)
+                            } catch (e: Throwable) {
+                                logger?.e("Exception in event handler [$source]: $e")
+                            }
+                        }
+                    } else {
+                        try {
+                            method.call(obj, event)
+                        } catch (e: Throwable) {
+                            logger?.e("Exception in event handler [$source]: $e")
+                        }
                     }
                 },
                 scope,
