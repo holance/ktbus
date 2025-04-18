@@ -407,8 +407,6 @@ class KtBus(val config: KtBusConfig = KtBusConfig()) {
      * @param channel The channel from which to clear the sticky event.
      *                Defaults to [DefaultChannelFactory.DEFAULT_CHANNEL] if not specified.
      *                Channels allow for event separation and management within the event bus.
-     * @param T The type of the event.
-     * @param E The type of the event handler. (This parameter is declared but not used in the function body)
      * @throws IllegalArgumentException if the provided clazz is null.
      * @throws IllegalStateException if the internal handler is not found for the given class and channel
      * @see getHandler
@@ -422,8 +420,8 @@ class KtBus(val config: KtBusConfig = KtBusConfig()) {
      * clearStickyEvent(UserLoggedInEvent::class, "user-events")
      * ```
      */
-    fun <T : Any, E : Any> clearStickyEvent(
-        clazz: KClass<T>,
+    fun clearStickyEvent(
+        clazz: KClass<*>,
         channel: String = DefaultChannelFactory.DEFAULT_CHANNEL
     ) {
         val handler = getHandler(clazz, channel)
