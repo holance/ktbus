@@ -69,17 +69,17 @@ class KtBusRequestTests {
         }
 
         @Subscribe
-        fun onEvent1To2(event: RequestEvent<Event1, Event2>) {
+        fun onEvent1To2(event: Request<Event1, Event2>) {
             event.setResult(Event2(event.data.value + 1))
         }
 
         @Subscribe
-        fun onEvent2To3(event: RequestEvent<Event2, Event3>) {
+        fun onEvent2To3(event: Request<Event2, Event3>) {
             event.setResult(Event3(event.data.value + 1))
         }
 
         @Subscribe
-        fun onEvent2To3FailSetResult(event: RequestEvent<Event1, Event2>) {
+        fun onEvent2To3FailSetResult(event: Request<Event1, Event2>) {
             val scope = CoroutineScope(Dispatchers.IO)
             scope.launch {
                 delay(500)
@@ -88,12 +88,12 @@ class KtBusRequestTests {
         }
 
         @Subscribe(channel = "test2")
-        fun onEventChannel(event: RequestEvent<Event1, Event2>) {
+        fun onEventChannel(event: Request<Event1, Event2>) {
             event.setResult(Event2(event.data.value + 2))
         }
 
         @Subscribe(channel = "test3")
-        fun onEventChannelError(event: RequestEvent<Event1, Event2>) {
+        fun onEventChannelError(event: Request<Event1, Event2>) {
             event.setError("Error occurred")
         }
     }

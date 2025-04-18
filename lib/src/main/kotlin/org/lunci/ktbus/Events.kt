@@ -14,7 +14,7 @@ sealed class Response<out R> {
 
 @Suppress("unused")
 // Request event - carries data and a unique ID
-data class RequestEvent<T, E>(
+data class Request<T, E>(
     val requestId: String = UUID.randomUUID().toString(), // Unique ID for correlation
     val data: T,
     val bus: KtBus,
