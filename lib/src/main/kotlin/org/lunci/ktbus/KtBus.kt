@@ -451,11 +451,18 @@ class KtBus(val config: KtBusConfig = KtBusConfig()) {
      * ```kotlin
      * // Assuming you have a class called MyEvent and MyResponse and an instance of your bus called 'myBus'
      * data class MyEvent(val id: Int)
-     * data class MyResponse(val message: String)
+     * data class MyResponse(val sum: Int)
+     *
+     * @Subscribe
+     * fun handleRequest(event: Request<MyEvent, MyResponse>) {
+     *     // Process event and create a response with type MyResponse
+     *     val sum = event.data.id + 1
+     *     event.setResult(MyResponse(sum))
+     * }
      *
      * myBus.request<MyEvent, MyResponse>(MyEvent(1)) { response ->
      *     when (response) {
-     *         is Response.Success -> println("Received response: ${response.data.message}")
+     *         is Response.Success -> println("Received response: ${response.data.sum}")
      *         is Response.Error -> println("Received error: ${response.error}")
      *         Response.Timeout -> println("Request timed out")
      *     }
@@ -504,14 +511,23 @@ class KtBus(val config: KtBusConfig = KtBusConfig()) {
      * ```kotlin
      * // Assuming you have a class called MyEvent and MyResponse and an instance of your bus called 'myBus'
      * data class MyEvent(val id: Int)
-     * data class MyResponse(val message: String)
+     * data class MyResponse(val sum: Int)
      *
-     * myBus.requestAsync<MyEvent, MyResponse>(MyEvent(1)) { response ->
-     *     when (response) {
-     *         is Response.Success -> println("Received response: ${response.data.message}")
-     *         is Response.Error -> println("Received error: ${response.error}")
-     *         Response.Timeout -> println("Request timed out")
-     *     }
+     * @Subscribe
+     * fun handleRequest(event: Request<MyEvent, MyResponse>) {
+     *     // Process event and create a response with type MyResponse
+     *     val sum = event.data.id + 1
+     *     event.setResult(MyResponse(sum))
+     * }
+     *
+     * scope.launch {
+     *    myBus.requestAsync<MyEvent, MyResponse>(MyEvent(1)) { response ->
+     *        when (response) {
+     *            is Response.Success -> println("Received response: ${response.data.sum}")
+     *            is Response.Error -> println("Received error: ${response.error}")
+     *            Response.Timeout -> println("Request timed out")
+     *        }
+     *    }
      * }
      * ```
      */
