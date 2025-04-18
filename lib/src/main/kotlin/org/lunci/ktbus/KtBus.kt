@@ -38,8 +38,13 @@ enum class DispatcherTypes {
     Unconfined
 }
 
+data class KtBusConfig(
+    val bufferCapacity: Int = 10,
+    val onBufferOverflow: BufferOverflow = BufferOverflow.SUSPEND
+)
+
 @Suppress("unused")
-class KtBus {
+class KtBus(val config: KtBusConfig = KtBusConfig()) {
     /**
      * Companion object for managing global configurations and utilities related to the event bus.
      *
@@ -92,8 +97,8 @@ class KtBus {
 
     private class EventHandler<T : Any>(
         private val typeName: String,
-        bufferCapacity: Int = 1,
-        onBufferOverflow: BufferOverflow = BufferOverflow.DROP_OLDEST
+        bufferCapacity: Int,
+        onBufferOverflow: BufferOverflow
     ) : IEventHandler {
         private class Subscriptions<T : Any>(
             val events: SharedFlow<T>,
@@ -230,7 +235,7 @@ class KtBus {
             ConcurrentHashMap<String, IEventHandler>()
         }
         return chHandlers.getOrPut(channel) {
-            EventHandler<T>(clazz.simpleName)
+            EventHandler<T>(clazz.simpleName, config.bufferCapacity, config.onBufferOverflow)
         } as EventHandler<T>
     }
 
