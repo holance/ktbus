@@ -267,9 +267,39 @@ class KtBus(val config: KtBusConfig = KtBusConfig()) {
         handler?.unsubscribe(scope, id)
     }
 
+    private suspend fun invokeSuspendFunction(
+        method: Method,
+        obj: Any,
+        event: Any
+    ) {
+        suspendCoroutine<Unit> {
+            try {
+                method.invoke(obj, event, it)
+            } catch (e: Exception) {
+                it.resumeWithException(e)
+            }
+        }
+    }
     // endregion
 
     // region Public functions
+    /**
+     * Posts an event to a specified channel synchronously.
+     *
+     * This function provides a synchronous way to post an event to a channel. It internally uses `runBlocking`
+     * to ensure the event is enqueued into a sharedFlow object before the function returns.
+     *
+     * Note: If there is a sticky event previously posted to the same channel, the sticky event will be cleared after posting.*
+     *
+     * @param event The event to be posted. Must be a non-null object.
+     * @param channel The name of the channel to post the event to. Defaults to `DEFAULT_CHANNEL`.
+     * @param scope The coroutine scope in which to run the `postAsync` operation within `runBlocking`. Defaults to `unconfinedScope`.
+     * @param T The type of the event.
+     *
+     * @throws Exception if `postAsync` throws an exception.
+     *
+     * @see postAsync For the asynchronous counterpart of this function.
+     */
     fun <T : Any> post(
         event: T,
         channel: String = DefaultChannelFactory.DEFAULT_CHANNEL,
@@ -278,6 +308,34 @@ class KtBus(val config: KtBusConfig = KtBusConfig()) {
         runBlocking { postAsync(event, channel) }
     }
 
+    /**
+     * Posts an event asynchronously to a specific or default channel.
+     *
+     * This function dispatches an event to the appropriate event handler based on the event's class and the specified channel.
+     * If no handler is found for the given event type and channel, the event is silently ignored.
+     *
+     * This is a suspend function, meaning it can be safely called within coroutines and may suspend execution if necessary.
+     *
+     * *Note: If there is a sticky event previously posted to the same channel, the sticky event will be cleared after posting.*
+     *
+     * @param event The event to be posted. Must be a non-null object.
+     * @param channel The channel to post the event to. Defaults to [DefaultChannelFactory.DEFAULT_CHANNEL] if not specified.
+     * @param T The type of the event being posted. Must be a non-null class.
+     *
+     * @throws ClassCastException if the retrieved handler is not of the correct type [EventHandler<T>]
+     *
+     * Example:
+     * ```
+     * // Assuming you have an event class MyEvent and a corresponding handler
+     * data class MyEvent(val message: String)
+     *
+     * // In a coroutine scope:
+     * launch {
+     *     postAsync(MyEvent("Hello!")) // Posts MyEvent to the default channel
+     *     postAsync(MyEvent("Hello from channel 2!"), "channel2") // Posts to channel2.
+     * }
+     * ```
+     */
     suspend fun <T : Any> postAsync(
         event: T,
         channel: String = DefaultChannelFactory.DEFAULT_CHANNEL
@@ -287,6 +345,23 @@ class KtBus(val config: KtBusConfig = KtBusConfig()) {
         (handler as EventHandler<T>).post(event)
     }
 
+    /**
+     * Posts a sticky event to the specified channel.
+     *
+     * A sticky event is an event that is retained by the channel even after it has been posted.
+     * New subscribers will receive the last posted sticky event immediately upon subscription.
+     * If a new sticky event is posted to the channel, existing subscribers are also immediately notified.
+     *
+     * This function blocks the current thread until the sticky event is posted asynchronously.
+     *
+     *
+     * @param event The event to post. Must not be null.
+     * @param channel The channel to post the event to. Defaults to [DefaultChannelFactory.DEFAULT_CHANNEL].
+     * @param scope The coroutine scope used for launching the asynchronous operation. Defaults to a globally available UnconfinedTestDispatcher.
+     *              Note that the default `unconfinedScope` is suitable for testing, for production use, you will want to use a more appropriate scope.
+     * @throws IllegalArgumentException if the event is null.
+     * @see postStickyAsync
+     */
     fun <T : Any> postSticky(
         event: T,
         channel: String = DefaultChannelFactory.DEFAULT_CHANNEL,
@@ -295,6 +370,21 @@ class KtBus(val config: KtBusConfig = KtBusConfig()) {
         runBlocking { postStickyAsync(event, channel) }
     }
 
+    /**
+     * Posts a sticky event asynchronously to the specified channel.
+     *
+     * A sticky event remains available to new subscribers even if they subscribe after the event was posted.
+     * Only one sticky event of each type can be active per channel at any given time.
+     * Posting a new sticky event of the same type to the same channel will replace the previous one.
+     *
+     * @param event The event to be posted. Must be a non-null object.
+     * @param channel The channel to post the event to. Defaults to [DefaultChannelFactory.DEFAULT_CHANNEL].
+     *                Different channels allow for separate event streams.
+     * @throws IllegalArgumentException if the event is null.
+     * @throws IllegalStateException if a handler for the given event type and channel cannot be created or retrieved.
+     * @see EventHandler.postSticky
+     * @see DefaultChannelFactory.DEFAULT_CHANNEL
+     */
     suspend fun <T : Any> postStickyAsync(
         event: T,
         channel: String = DefaultChannelFactory.DEFAULT_CHANNEL
@@ -304,23 +394,134 @@ class KtBus(val config: KtBusConfig = KtBusConfig()) {
         handler.postSticky(event)
     }
 
+    /**
+     * Clears a sticky event of the specified type from the specified channel.
+     *
+     * Sticky events are events that are retained after they are posted and are
+     * delivered to new subscribers who register after the event was initially posted.
+     * This function removes the sticky event from the event bus, ensuring that
+     * future subscribers will not receive this event.
+     *
+     * @param clazz The KClass representing the type of the event to clear.
+     *              This specifies the type of the sticky event to be removed.
+     * @param channel The channel from which to clear the sticky event.
+     *                Defaults to [DefaultChannelFactory.DEFAULT_CHANNEL] if not specified.
+     *                Channels allow for event separation and management within the event bus.
+     * @param T The type of the event.
+     * @param E The type of the event handler. (This parameter is declared but not used in the function body)
+     * @throws IllegalArgumentException if the provided clazz is null.
+     * @throws IllegalStateException if the internal handler is not found for the given class and channel
+     * @see getHandler
+     *
+     * Example Usage:
+     * ```kotlin
+     * // Clear a sticky event of type MyEvent from the default channel.
+     * clearStickyEvent(MyEvent::class)
+     *
+     * // Clear a sticky event of type UserLoggedInEvent from the "user-events" channel.
+     * clearStickyEvent(UserLoggedInEvent::class, "user-events")
+     * ```
+     */
+    fun <T : Any, E : Any> clearStickyEvent(
+        clazz: KClass<T>,
+        channel: String = DefaultChannelFactory.DEFAULT_CHANNEL
+    ) {
+        val handler = getHandler(clazz, channel)
+        handler?.removeStickyEvent()
+    }
+
+    /**
+     * Sends a request with the given [event] and handles the [Response] asynchronously.
+     *
+     * This function sends a request synchronously using [runBlocking]. It internally uses the [requestAsync]
+     * function to perform the asynchronous operation and then blocks the current thread until the request
+     * is completed.
+     *
+     * @param T The type of the event being sent.
+     * @param E The type of the expected result in the response.
+     * @param event The event data to be sent as part of the request.
+     * @param channel The name of the channel to use for sending the request. Defaults to [DefaultChannelFactory.DEFAULT_CHANNEL].
+     * @param timeout The maximum duration to wait for the response before timing out. Defaults to 5 seconds.
+     * @param scope The coroutine scope to use for launching the request. Defaults to an unconfined scope ([unconfinedScope]).
+     * @param onResult A callback function that receives the result of the request.
+     *                 It will receive a [Response] object which can be:
+     *                  - `Response.Success<E>`: If a successful response is received.
+     *                  - `Response.Error`: If an error response is received.
+     *                  - `Response.Timeout`: If no response is received within the specified timeout.
+     *
+     * **Usage Example:**
+     * ```kotlin
+     * // Assuming you have a class called MyEvent and MyResponse and an instance of your bus called 'myBus'
+     * data class MyEvent(val id: Int)
+     * data class MyResponse(val message: String)
+     *
+     * myBus.request<MyEvent, MyResponse>(MyEvent(1)) { response ->
+     *     when (response) {
+     *         is Response.Success -> println("Received response: ${response.data.message}")
+     *         is Response.Error -> println("Received error: ${response.error}")
+     *         Response.Timeout -> println("Request timed out")
+     *     }
+     * }
+     * ```
+     *
+     * @see requestAsync
+     * @see Response
+     * @see DefaultChannelFactory
+     * @see unconfinedScope
+     */
     fun <T : Any, E : Any> request(
         event: T,
-        onResult: (RequestResult<E>) -> Unit,
         channel: String = DefaultChannelFactory.DEFAULT_CHANNEL,
         timeout: Duration = 5.seconds,
-        scope: CoroutineScope = unconfinedScope
+        scope: CoroutineScope = unconfinedScope,
+        onResult: (Response<E>) -> Unit,
     ) {
         runBlocking {
-            requestAsync(event, onResult, channel, timeout)
+            requestAsync(event, channel, timeout, onResult)
         }
     }
 
+    /**
+     * Sends an asynchronous request and waits for a response.
+     *
+     * This function sends an event to a specified channel and then asynchronously
+     * waits for a corresponding response event with a matching correlation ID.
+     * The response is then delivered to the provided `onResult` callback.
+     *
+     * @param T The type of the request event data.
+     * @param E The type of the response event data.
+     * @param event The data payload of the request event to be sent.
+     * @param channel The channel to which the request event is sent and on which
+     *                the response is expected. Defaults to [DefaultChannelFactory.DEFAULT_CHANNEL].
+     * @param timeout The maximum duration to wait for a response before considering
+     *                the request as timed out. Defaults to 5 seconds.
+     * @param onResult A callback function that receives the result of the request.
+     *                 It will receive a [Response] object which can be:
+     *                  - `Response.Success<E>`: If a successful response is received.
+     *                  - `Response.Error`: If an error response is received.
+     *                  - `Response.Timeout`: If no response is received within the specified timeout.
+     *
+     *
+     * **Usage Example:**
+     * ```kotlin
+     * // Assuming you have a class called MyEvent and MyResponse and an instance of your bus called 'myBus'
+     * data class MyEvent(val id: Int)
+     * data class MyResponse(val message: String)
+     *
+     * myBus.requestAsync<MyEvent, MyResponse>(MyEvent(1)) { response ->
+     *     when (response) {
+     *         is Response.Success -> println("Received response: ${response.data.message}")
+     *         is Response.Error -> println("Received error: ${response.error}")
+     *         Response.Timeout -> println("Request timed out")
+     *     }
+     * }
+     * ```
+     */
     suspend fun <T : Any, E : Any> requestAsync(
         event: T,
-        onResult: (RequestResult<E>) -> Unit,
         channel: String = DefaultChannelFactory.DEFAULT_CHANNEL,
-        timeout: Duration = 5.seconds
+        timeout: Duration = 5.seconds,
+        onResult: (Response<E>) -> Unit,
     ) {
         val requestEvent = RequestEvent<T, E>(data = event, bus = this, channel = channel)
         val responseClass: KClass<ResponseEvent<E>> =
@@ -341,20 +542,12 @@ class KtBus(val config: KtBusConfig = KtBusConfig()) {
             responseListenerJob.await()
         }
         if (resultEvent?.data != null) {
-            onResult(RequestResult.Success(resultEvent.data))
+            onResult(Response.Success(resultEvent.data))
         } else if (resultEvent?.error != null) {
-            onResult(RequestResult.Error(resultEvent.error))
+            onResult(Response.Error(resultEvent.error))
         } else {
-            onResult(RequestResult.Timeout)
+            onResult(Response.Timeout)
         }
-    }
-
-    fun <T : Any> removeStickyEvent(
-        clazz: KClass<T>,
-        channel: String = DefaultChannelFactory.DEFAULT_CHANNEL
-    ) {
-        val handler = getHandler(clazz, channel)
-        handler?.removeStickyEvent()
     }
 
     /**
@@ -456,20 +649,6 @@ class KtBus(val config: KtBusConfig = KtBusConfig()) {
                 scope,
                 source
             )
-        }
-    }
-
-    suspend fun invokeSuspendFunction(
-        method: Method,
-        obj: Any,
-        event: Any
-    ) {
-        suspendCoroutine<Unit> {
-            try {
-                method.invoke(obj, event, it)
-            } catch (e: Exception) {
-                it.resumeWithException(e)
-            }
         }
     }
 
