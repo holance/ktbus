@@ -4,8 +4,9 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
+import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
-import org.junit.jupiter.api.Assertions.*
 
 class CoroutineScopeTests {
     val bus = KtBus.getDefault()
@@ -45,7 +46,7 @@ class CoroutineScopeTests {
     }
 
     @Suppress("unused")
-    class TestClass {
+    private class TestClass {
         val bus = KtBus.getDefault()
 
         val event1Result = mutableListOf<Event1>()
