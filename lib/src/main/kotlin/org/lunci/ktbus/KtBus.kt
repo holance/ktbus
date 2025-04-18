@@ -521,7 +521,7 @@ class KtBus(val config: KtBusConfig = KtBusConfig()) {
         timeout: Duration = 5.seconds,
         onResult: (Response<E>) -> Unit,
     ) {
-        val requestEvent = RequestEvent<T, E>(data = event, bus = this, channel = channel)
+        val request = Request<T, E>(data = event, bus = this, channel = channel)
         val responseClass: KClass<ResponseEvent<E>> =
             ResponseEvent::class as KClass<ResponseEvent<E>>
         val handler =
@@ -529,12 +529,12 @@ class KtBus(val config: KtBusConfig = KtBusConfig()) {
         val responseListenerJob: Deferred<ResponseEvent<E>> =
             unconfinedScope.async {
                 handler.events.filter {
-                    it.correlationId == requestEvent.requestId
+                    it.correlationId == request.requestId
                 }.first()
             }
 
         yield()
-        post(requestEvent, channel)
+        post(request, channel)
 
         val resultEvent = withTimeoutOrNull(timeout) {
             responseListenerJob.await()

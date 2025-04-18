@@ -66,7 +66,7 @@ class MathClass {
         bus.unsubscribe(this)
     }
     @Subscribe
-    fun handleRequest(event: RequestEvent<RequestSquareEvent, SquareResult>) {
+    fun handleRequest(event: Request<RequestSquareEvent, SquareResult>) {
         // Process event and create a response with type Event2
         event.setResult(SquareResult(event.data.value * event.data.value))
     }
@@ -74,19 +74,19 @@ class MathClass {
 
 val bus = KtBus.getDefault()
 
-bus.request<RequestSquareEvent, SquareResult>(RequestSquareEvent(5), { result: RequestResult<SquareResult> ->
+bus.request<RequestSquareEvent, SquareResult>(RequestSquareEvent(5)) { result: Response<SquareResult> ->
     when (result) {
-        is RequestResult.Success -> {
+        is Response.Success -> {
             assert(result.data.value == 25)
         }
-        is RequestResult.Error -> {
+        is Response.Error -> {
             println("Error: ${result.error}")
         }
-        is RequestResult.Timeout -> {
+        is Response.Timeout -> {
             println("Timeout")
         }
     }
-})
+}
 ```
 
 ### Use Channel
