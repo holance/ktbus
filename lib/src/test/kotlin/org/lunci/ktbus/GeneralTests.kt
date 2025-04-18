@@ -60,9 +60,9 @@ class KtBusGeneralTest {
             test.tearDown()
         }
 
-        bus.removeStickyEvent(Event1::class)
-        bus.removeStickyEvent(Event2::class)
-        bus.removeStickyEvent(Event3::class)
+        bus.clearStickyEvent(Event1::class)
+        bus.clearStickyEvent(Event2::class)
+        bus.clearStickyEvent(Event3::class)
 
         tests.forEach { test ->
             test.setup()
