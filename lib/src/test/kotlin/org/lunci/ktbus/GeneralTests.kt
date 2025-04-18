@@ -9,31 +9,35 @@ class KtBusGeneralTest {
     @Test
     fun busSubscription() {
         val iteration = 100
-        val test = TestClass()
-        test.setup()
+        val tests = arrayOf(TestClass(), TestClass())
+        tests.forEach { it.setup() }
         for (i in 0 until iteration) {
             bus.post(Event1(i))
             bus.post(Event2(i + 1))
             bus.post(Event3(i + 2))
         }
-        assertEquals(iteration, test.event1Result.size)
-        assertEquals(iteration, test.event11Result.size)
-        assertEquals(iteration, test.event2Result.size)
-        assertEquals(iteration, test.event3Result.size)
-        for (i in 0 until iteration) {
-            assertEquals(i, test.event1Result[i].value)
-            assertEquals(i, test.event11Result[i].value)
-            assertEquals(i + 1, test.event2Result[i].value)
-            assertEquals(i + 2, test.event3Result[i].value)
+        tests.forEach { test ->
+            assertEquals(iteration, test.event1Result.size)
+            assertEquals(iteration, test.event11Result.size)
+            assertEquals(iteration, test.event2Result.size)
+            assertEquals(iteration, test.event3Result.size)
+            for (i in 0 until iteration) {
+                assertEquals(i, test.event1Result[i].value)
+                assertEquals(i, test.event11Result[i].value)
+                assertEquals(i + 1, test.event2Result[i].value)
+                assertEquals(i + 2, test.event3Result[i].value)
+            }
         }
-        test.tearDown()
+        tests.forEach { it.tearDown() }
         bus.post(Event1(1))
         bus.post(Event2(2))
         bus.post(Event3(3))
-        assertEquals(0, test.event1Result.size)
-        assertEquals(0, test.event11Result.size)
-        assertEquals(0, test.event2Result.size)
-        assertEquals(0, test.event3Result.size)
+        tests.forEach { test ->
+            assertEquals(0, test.event1Result.size)
+            assertEquals(0, test.event11Result.size)
+            assertEquals(0, test.event2Result.size)
+            assertEquals(0, test.event3Result.size)
+        }
     }
 
     @Test
@@ -41,26 +45,33 @@ class KtBusGeneralTest {
         bus.postSticky(Event1(0))
         bus.postSticky(Event2(1))
         bus.postSticky(Event3(2))
-        val test = TestClass()
-        test.setup()
-        assertEquals(1, test.event1Result.size)
-        assertEquals(1, test.event11Result.size)
-        assertEquals(1, test.event2Result.size)
-        assertEquals(1, test.event3Result.size)
-        assertEquals(0, test.event1Result[0].value)
-        assertEquals(0, test.event11Result[0].value)
-        assertEquals(1, test.event2Result[0].value)
-        assertEquals(2, test.event3Result[0].value)
-        test.tearDown()
-        bus.removeStickyEvent(Event1::class.java)
-        bus.removeStickyEvent(Event2::class.java)
-        bus.removeStickyEvent(Event3::class.java)
-        test.setup()
-        assertEquals(0, test.event1Result.size)
-        assertEquals(0, test.event11Result.size)
-        assertEquals(0, test.event2Result.size)
-        assertEquals(0, test.event3Result.size)
-        test.tearDown()
+        val tests = arrayOf(TestClass(), TestClass())
+
+        tests.forEach { test ->
+            test.setup()
+            assertEquals(1, test.event1Result.size)
+            assertEquals(1, test.event11Result.size)
+            assertEquals(1, test.event2Result.size)
+            assertEquals(1, test.event3Result.size)
+            assertEquals(0, test.event1Result[0].value)
+            assertEquals(0, test.event11Result[0].value)
+            assertEquals(1, test.event2Result[0].value)
+            assertEquals(2, test.event3Result[0].value)
+            test.tearDown()
+        }
+
+        bus.removeStickyEvent(Event1::class)
+        bus.removeStickyEvent(Event2::class)
+        bus.removeStickyEvent(Event3::class)
+
+        tests.forEach { test ->
+            test.setup()
+            assertEquals(0, test.event1Result.size)
+            assertEquals(0, test.event11Result.size)
+            assertEquals(0, test.event2Result.size)
+            assertEquals(0, test.event3Result.size)
+            test.tearDown()
+        }
     }
 
     @Suppress("unused")
