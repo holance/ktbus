@@ -21,34 +21,36 @@ class KtBusRequestTests {
         test.setup()
         val job = scope.launch {
             for (i in 0 until iteration) {
-                bus.request<Event1, Event2>(Event1(i)) { result: Response<Event2> ->
-                    when (result) {
-                        is Response.Success -> assertEquals(result.data.value, i + 1)
-                        else -> fail("Unexpected result type")
+                scope.launch {
+                    bus.request<Event1, Event2>(Event1(i)) { result: Response<Event2> ->
+                        when (result) {
+                            is Response.Success -> assertEquals(result.data.value, i + 1)
+                            else -> fail("Unexpected result type")
+                        }
                     }
-                }
-                bus.request<Event2, Event3>(Event2(i * 100)) { result: Response<Event3> ->
-                    when (result) {
-                        is Response.Success -> assertEquals(result.data.value, i * 100 + 1)
-                        else -> fail("Unexpected result type")
+                    bus.request<Event2, Event3>(Event2(i * 100)) { result: Response<Event3> ->
+                        when (result) {
+                            is Response.Success -> assertEquals(result.data.value, i * 100 + 1)
+                            else -> fail("Unexpected result type")
+                        }
                     }
-                }
-                bus.request<Event1, Event2>(
-                    Event1(i * 10),
-                    channel = "test2"
-                ) { result: Response<Event2> ->
-                    when (result) {
-                        is Response.Success -> assertEquals(result.data.value, i * 10 + 2)
-                        else -> fail("Unexpected result type")
+                    bus.request<Event1, Event2>(
+                        Event1(i * 10),
+                        channel = "test2"
+                    ) { result: Response<Event2> ->
+                        when (result) {
+                            is Response.Success -> assertEquals(result.data.value, i * 10 + 2)
+                            else -> fail("Unexpected result type")
+                        }
                     }
-                }
-                bus.request<Event1, Event2>(
-                    Event1(i * 10),
-                    channel = "test3"
-                ) { result: Response<Event2> ->
-                    when (result) {
-                        is Response.Error -> assertEquals(result.message, "Error occurred")
-                        else -> fail("Unexpected result type")
+                    bus.request<Event1, Event2>(
+                        Event1(i * 10),
+                        channel = "test3"
+                    ) { result: Response<Event2> ->
+                        when (result) {
+                            is Response.Error -> assertEquals(result.message, "Error occurred")
+                            else -> fail("Unexpected result type")
+                        }
                     }
                 }
             }
@@ -68,7 +70,7 @@ class KtBusRequestTests {
             bus.unsubscribe(this)
         }
 
-        @Subscribe
+        @Subscribe(scope = DispatcherTypes.IO)
         fun onEvent1To2(event: Request<Event1, Event2>) {
             event.setResult(Event2(event.data.value + 1))
         }
@@ -87,7 +89,7 @@ class KtBusRequestTests {
             }
         }
 
-        @Subscribe(channel = "test2")
+        @Subscribe(channel = "test2", scope = DispatcherTypes.IO)
         fun onEventChannel(event: Request<Event1, Event2>) {
             event.setResult(Event2(event.data.value + 2))
         }
