@@ -44,6 +44,7 @@ jobs:
         uses: gittools/actions/gitversion/execute@v3.2.0
         with:
           useConfigFile: true
+          configFilePath: gitversion.yml
 
       - name: Set version in Gradle build file
         run: ./gradlew -Pversion=$(gitversion | jq -r '.SemVer')
