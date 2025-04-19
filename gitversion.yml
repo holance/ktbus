@@ -1,2 +1,27 @@
-mode: Mainline
-next-version: 1.0.0
+next-version: 0.1.0
+branches:
+  develop:
+    regex: ^develop
+    mode: ContinuousDeployment
+    tag: alpha
+    increment: Minor
+    prevent-increment-of-merged-branch-version: false
+    track-merge-target: true
+    source-branches: []
+    tracks-release-branches: true
+    is-release-branch: false
+    is-mainline: false
+    pre-release-weight: 0
+    
+  release:
+    regex: ^release
+    tag: beta
+    increment: Minor
+    is-release-branch: false
+    is-mainline: false
+
+  main:
+    regex: ^main
+    mode: ContinuousDeployment
+    is-release-branch: true
+    is-mainline: true
