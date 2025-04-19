@@ -32,13 +32,15 @@ jobs:
         run: chmod +x gradlew
 
       - name: Install GitVersion
-        uses: gittools/actions/gitversion/setup@v0.9.7
+        uses: gittools/actions/gitversion/setup@v3.2.0
         with:
-          versionSpec: '5.x'
+          versionSpec: '6.2.x'
 
-      - name: Generate version information
-        id: gitversion
-        run: gitversion /output json /output buildserver
+      - name: Determine Version
+        id: gitversion # step id used as reference for output values
+        uses: gittools/actions/gitversion/execute@v3.2.0
+        with:
+          useConfigFile: true
 
       - name: Set version in Gradle build file
         run: ./gradlew -Pversion=$(gitversion | jq -r '.SemVer')
