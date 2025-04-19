@@ -31,8 +31,15 @@ jobs:
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
 
+      - name: Install GitVersion
+        run: dotnet tool install --global GitVersion.Tool
+
+      - name: Determine version using GitVersion
+        run: gitversion /output json /showvariable FullSemVer
+        id: gitversion
+
       - name: Build with Gradle
-        run: ./gradlew :lib:assemble
+        run: ./gradlew :lib:assemble -Pversion=${{ steps.gitversion.outputs.FullSemVer }}
 
       - name: Run tests
         run: ./gradlew :lib:test

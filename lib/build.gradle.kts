@@ -12,6 +12,9 @@ plugins {
 
     // Apply the java-library plugin for API and implementation separation.
     `java-library`
+
+    // Apply the GitVersion plugin
+    id("com.palantir.git-version") version "0.12.3"
 }
 
 repositories {
@@ -57,3 +60,11 @@ kotlin {
 //        languageVersion = JavaLanguageVersion.of(11)
 //    }
 //}
+
+// Use GitVersion for versioning
+val gitVersion: groovy.lang.Closure<String> by extra
+version = gitVersion()
+
+gitVersion {
+    // Customize GitVersion settings if needed
+}
