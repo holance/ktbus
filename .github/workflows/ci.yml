@@ -31,6 +31,18 @@ jobs:
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
 
+      - name: Install GitVersion
+        uses: gittools/actions/gitversion/setup@v0.9.7
+        with:
+          versionSpec: '5.x'
+
+      - name: Generate version information
+        id: gitversion
+        run: gitversion /output json /output buildserver
+
+      - name: Set version in Gradle build file
+        run: ./gradlew -Pversion=$(gitversion | jq -r '.SemVer')
+
       - name: Build with Gradle
         run: ./gradlew :lib:assemble
 
@@ -40,6 +52,6 @@ jobs:
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: build-artifacts
+          name: build-artifacts-$(gitversion | jq -r '.SemVer')
           path: |
             lib/build/libs/*.jar
