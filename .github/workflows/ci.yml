@@ -45,15 +45,9 @@ jobs:
         with:
           useConfigFile: true
           configFilePath: gitversion.yml
-      # - name: Determine Version
-      #   id: version_step # step id used as reference for output values
-      #   run:  |
-      #     /opt/hostedtoolcache/GitVersion.Tool/6.2.0/dotnet-gitversion /output json /l console /config gitversion.yml
-      #     echo "GitVersion.FullSemVer = $(GitVersion.FullSemVer)"
-      #     echo "GitVersion.SemVer = $(GitVersion.SemVer)"
 
       - name: Set version in Gradle build file
-        run: ./gradlew -Pversion=$(version_step | jq -r '.SemVer')
+        run: ./gradlew -Pversion=${{ steps.version_step.outputs.SemVer }}
 
       - name: Build with Gradle
         run: ./gradlew :lib:assemble
@@ -64,6 +58,6 @@ jobs:
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: build-artifacts-$(version_step | jq -r '.SemVer')
+          name: build-artifacts-${{ steps.version_step.outputs.SemVer }}
           path: |
             lib/build/libs/*.jar
