@@ -51,6 +51,8 @@ kotlin {
     jvmToolchain(11) // Specify your target JVM version
 }
 
+version = System.getenv("VERSION") ?: "unspecified"
+
 // Apply a specific Java toolchain to ease working on different environments.
 //java {
 //    toolchain {
