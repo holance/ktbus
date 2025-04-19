@@ -3,7 +3,7 @@ branches:
   develop:
     regex: ^develop
     mode: ContinuousDeployment
-    tag: alpha
+    label: alpha
     increment: Minor
     prevent-increment-of-merged-branch-version: false
     track-merge-target: true
@@ -15,7 +15,7 @@ branches:
     
   release:
     regex: ^release
-    tag: beta
+    label: beta
     increment: Minor
     is-release-branch: false
     is-mainline: false
