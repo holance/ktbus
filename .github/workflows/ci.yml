@@ -41,10 +41,7 @@ jobs:
 
       - name: Determine Version
         id: version_step # step id used as reference for output values
-        uses: gittools/actions/gitversion/execute@v3.2.0
-        with:
-          useConfigFile: true
-          configFilePath: gitversion.yml
+        run:  /opt/hostedtoolcache/GitVersion.Tool/6.2.0/dotnet-gitversion /output json /l console /config gitversion.yml
 
       - name: Set version in Gradle build file
         run: ./gradlew -Pversion=$(version_step | jq -r '.SemVer')
