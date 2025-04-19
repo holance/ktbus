@@ -40,14 +40,14 @@ jobs:
           versionSpec: '6.2.x'
 
       - name: Determine Version
-        id: gitversion # step id used as reference for output values
+        id: version_step # step id used as reference for output values
         uses: gittools/actions/gitversion/execute@v3.2.0
         with:
           useConfigFile: true
           configFilePath: gitversion.yml
 
       - name: Set version in Gradle build file
-        run: ./gradlew -Pversion=$(gitversion | jq -r '.SemVer')
+        run: ./gradlew -Pversion=$(version_step | jq -r '.SemVer')
 
       - name: Build with Gradle
         run: ./gradlew :lib:assemble
@@ -58,6 +58,6 @@ jobs:
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: build-artifacts-$(gitversion | jq -r '.SemVer')
+          name: build-artifacts-$(version_step | jq -r '.SemVer')
           path: |
             lib/build/libs/*.jar
