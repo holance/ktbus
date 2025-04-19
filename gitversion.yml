@@ -17,10 +17,10 @@ branches:
     label: beta
     increment: Minor
     is-release-branch: false
-    is-mainline: false
+    is-main-branch: false
 
   main:
     regex: ^main
     mode: ContinuousDeployment
     is-release-branch: true
-    is-mainline: true
+    is-main-branch: true
