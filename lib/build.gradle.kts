@@ -32,8 +32,6 @@ dependencies {
     implementation(libs.kotlinx.coroutines.core)
 }
 
-// Set a default version (e.g., for local builds)
-version = "0.0.0-SNAPSHOT" 
 group = "org.holance" // groupId is often set at the project level too
 
 publishing {
