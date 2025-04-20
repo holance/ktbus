@@ -40,9 +40,9 @@ publishing {
     publications {
         create<MavenPublication>("maven") {
             from(components["java"])
-            groupId = project.group
+            groupId = project.group.toString()
             artifactId = "ktbus"
-            version = project.version
+            version = project.version.toString()
             pom {
                 name = "KtBus"
                 description = "An event bus implementation based on Kotlin Sharedflow."
