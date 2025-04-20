@@ -32,13 +32,17 @@ dependencies {
     implementation(libs.kotlinx.coroutines.core)
 }
 
+// Set a default version (e.g., for local builds)
+version = "0.0.0-SNAPSHOT" 
+group = "org.holance" // groupId is often set at the project level too
+
 publishing {
     publications {
         create<MavenPublication>("maven") {
             from(components["java"])
-            groupId = "org.holance"
+            groupId = project.group
             artifactId = "ktbus"
-            version = project.version.toString()
+            version = project.version
             pom {
                 name = "KtBus"
                 description = "An event bus implementation based on Kotlin Sharedflow."
