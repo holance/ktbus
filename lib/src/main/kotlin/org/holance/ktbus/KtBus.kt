@@ -1,7 +1,7 @@
 @file:Suppress("UNCHECKED_CAST")
 @file:OptIn(ExperimentalCoroutinesApi::class)
 
-package org.lunci.ktbus
+package org.holance.ktbus
 
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Deferred

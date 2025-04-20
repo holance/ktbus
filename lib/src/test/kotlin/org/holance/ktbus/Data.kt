@@ -1,4 +1,4 @@
-package org.lunci.ktbus
+package org.holance.ktbus
 
 data class Event1(val value: Int)
 data class Event2(val value: Int)
