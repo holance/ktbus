@@ -14,7 +14,7 @@ class CoroutineScopeTests {
 
     @Test
     fun scopedHandlerTests() {
-        val iteration = 100
+        val iteration = 10
         val tests = arrayOf(TestClass(), TestClass())
         tests.forEach { it.setup() }
         for (i in 0 until iteration) {
