@@ -32,7 +32,7 @@ dependencies {
     implementation(libs.kotlinx.coroutines.core)
 }
 
-group = "org.holance" // groupId is often set at the project level too
+group = "ktbus" // groupId is often set at the project level too
 
 publishing {
     publications {

@@ -18,6 +18,9 @@ jobs:
   build:
 
     runs-on: ubuntu-latest
+    permissions: # <--- ADD THIS SECTION
+      contents: read
+      packages: write # <--- Grants permission to write packages
 
     steps:
       - name: Checkout
