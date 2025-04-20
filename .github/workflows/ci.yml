@@ -76,7 +76,7 @@ jobs:
 
       - name: Publish to GitHub Packages
         if: github.event_name != 'pull_request'
-        run: ./gradlew :lib:publish
+        run: ./gradlew :lib:publish -Pversion=${{ steps.version_step.outputs.SemVer }}
         env:
           USERNAME: ${{ secrets.GITHUB_ACTOR }}
           TOKEN: ${{ secrets.GITHUB_TOKEN }}
