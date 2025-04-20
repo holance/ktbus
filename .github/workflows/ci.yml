@@ -75,6 +75,7 @@ jobs:
           cp .github/settings.xml ~/.m2/settings.xml
 
       - name: Publish to GitHub Packages
+        if: github.event_name != 'pull_request'
         run: ./gradlew :lib:publish
         env:
           USERNAME: ${{ secrets.GITHUB_ACTOR }}
