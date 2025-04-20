@@ -50,7 +50,7 @@ publishing {
                 licenses {
                     license {
                         name = "MIT License"
-                        url = "https://github.com/holance/ktbus/blob/publish-maven-package/LICENSE"
+                        url = "https://github.com/holance/ktbus/blob/main/LICENSE"
                     }
                 }
                 developers {
