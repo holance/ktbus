@@ -68,3 +68,14 @@ jobs:
           name: build-artifacts-${{ steps.version_step.outputs.SemVer }}
           path: |
             lib/build/libs/*.jar
+
+      - name: Set up GitHub Packages repository
+        run: |
+          mkdir -p ~/.m2
+          cp .github/settings.xml ~/.m2/settings.xml
+
+      - name: Publish to GitHub Packages
+        run: ./gradlew :lib:publish
+        env:
+          USERNAME: ${{ secrets.GITHUB_ACTOR }}
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -12,6 +12,9 @@ plugins {
 
     // Apply the java-library plugin for API and implementation separation.
     `java-library`
+
+    // Apply the maven-publish plugin to add support for publishing to Maven repositories.
+    `maven-publish`
 }
 
 repositories {
@@ -27,6 +30,27 @@ dependencies {
     implementation(libs.guava)
     implementation(libs.kotlin.reflect)
     implementation(libs.kotlinx.coroutines.core)
+}
+
+publishing {
+    publications {
+        create<MavenPublication>("maven") {
+            from(components["java"])
+            groupId = "org.holance"
+            artifactId = "ktbus"
+            version = project.version.toString()
+        }
+    }
+    repositories {
+        maven {
+            name = "GitHubPackages"
+            url = uri("https://maven.pkg.github.com/holance/ktbus")
+            credentials {
+                username = project.findProperty("gpr.user") as String? ?: System.getenv("USERNAME")
+                password = project.findProperty("gpr.token") as String? ?: System.getenv("TOKEN")
+            }
+        }
+    }
 }
 
 testing {
