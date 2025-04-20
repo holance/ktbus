@@ -1,4 +1,4 @@
-package org.lunci.ktbus
+package org.holance.ktbus
 
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Test

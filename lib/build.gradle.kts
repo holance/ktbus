@@ -12,6 +12,9 @@ plugins {
 
     // Apply the java-library plugin for API and implementation separation.
     `java-library`
+
+    // Apply the maven-publish plugin to add support for publishing to Maven repositories.
+    `maven-publish`
 }
 
 repositories {
@@ -27,6 +30,52 @@ dependencies {
     implementation(libs.guava)
     implementation(libs.kotlin.reflect)
     implementation(libs.kotlinx.coroutines.core)
+}
+
+group = "org.holance" // groupId is often set at the project level too
+
+publishing {
+    publications {
+        create<MavenPublication>("maven") {
+            from(components["java"])
+            groupId = project.group.toString()
+            artifactId = "ktbus"
+            version = project.version.toString()
+            pom {
+                name = "KtBus"
+                description = "An event bus implementation based on Kotlin Sharedflow."
+                url = "https://github.com/holance/ktbus"
+                licenses {
+                    license {
+                        name = "MIT License"
+                        url = "https://github.com/holance/ktbus/blob/main/LICENSE"
+                    }
+                }
+                developers {
+                    developer {
+                        id = "holance"
+                        name = "holance"
+                        email = "holance.app@gmail.com"
+                    }
+                }
+                scm {
+                    connection = "scm:git:git://github.com/holance/ktbus.git"
+                    developerConnection = "scm:git:ssh://github.com/holance/ktbus.git"
+                    url = "https://github.com/holance/ktbus"
+                }
+            }
+        }
+    }
+    repositories {
+        maven {
+            name = "GitHubPackages"
+            url = uri("https://maven.pkg.github.com/holance/ktbus")
+            credentials {
+                username = project.findProperty("gpr.user") as String? ?: System.getenv("USERNAME")
+                password = project.findProperty("gpr.token") as String? ?: System.getenv("TOKEN")
+            }
+        }
+    }
 }
 
 testing {
@@ -50,6 +99,8 @@ tasks.test {
 kotlin {
     jvmToolchain(11) // Specify your target JVM version
 }
+
+version = System.getenv("VERSION") ?: "unspecified"
 
 // Apply a specific Java toolchain to ease working on different environments.
 //java {

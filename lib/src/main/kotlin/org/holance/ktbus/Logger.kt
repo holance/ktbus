@@ -1,4 +1,4 @@
-package org.lunci.ktbus
+package org.holance.ktbus
 
 @Suppress("unused")
 interface Logger {

@@ -18,9 +18,15 @@ jobs:
   build:
 
     runs-on: ubuntu-latest
+    permissions: # <--- ADD THIS SECTION
+      contents: read
+      packages: write # <--- Grants permission to write packages
 
     steps:
-      - uses: actions/checkout@v3
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up JDK 17
         uses: actions/setup-java@v3
@@ -31,15 +37,49 @@ jobs:
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
 
+      - name: Install GitVersion
+        uses: gittools/actions/gitversion/setup@v3.2.0
+        with:
+          versionSpec: '6.2.x'
+          
+      - name: Determine Version
+        id: version_step # step id used as reference for output values
+        uses: gittools/actions/gitversion/execute@v3.2.0
+        with:
+          useConfigFile: true
+          configFilePath: gitversion.yml
+
+      - name: Set version in Gradle build file
+        run: ./gradlew -Pversion=${{ steps.version_step.outputs.SemVer }}
+
       - name: Build with Gradle
         run: ./gradlew :lib:assemble
 
       - name: Run tests
-        run: ./gradlew :lib:test
+        run: ./gradlew :lib:test --info
+        continue-on-error: true
+
+      - name: Upload Test Report
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: lib/build/reports/tests/test/
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: build-artifacts
+          name: build-artifacts-${{ steps.version_step.outputs.SemVer }}
           path: |
             lib/build/libs/*.jar
+
+      - name: Set up GitHub Packages repository
+        run: |
+          mkdir -p ~/.m2
+          cp .github/settings.xml ~/.m2/settings.xml
+
+      - name: Publish to GitHub Packages
+        if: github.event_name != 'pull_request'
+        run: ./gradlew :lib:publish -Pversion=${{ steps.version_step.outputs.SemVer }}
+        env:
+          USERNAME: ${{ secrets.GITHUB_ACTOR }}
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}

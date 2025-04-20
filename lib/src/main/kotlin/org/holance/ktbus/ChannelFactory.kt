@@ -1,4 +1,4 @@
-package org.lunci.ktbus
+package org.holance.ktbus
 
 interface ChannelFactory {
     fun createChannel(obj: Any): String
