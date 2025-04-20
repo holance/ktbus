@@ -39,6 +39,29 @@ publishing {
             groupId = "org.holance"
             artifactId = "ktbus"
             version = project.version.toString()
+            pom {
+                name = "KtBus"
+                description = "An event bus implementation based on Kotlin Sharedflow."
+                url = "https://github.com/holance/ktbus"
+                licenses {
+                    license {
+                        name = "MIT License"
+                        url = "https://github.com/holance/ktbus/blob/publish-maven-package/LICENSE"
+                    }
+                }
+                developers {
+                    developer {
+                        id = "holance"
+                        name = "holance"
+                        email = "holance.app@gmail.com"
+                    }
+                }
+                scm {
+                    connection = "scm:git:git://github.com/holance/ktbus.git"
+                    developerConnection = "scm:git:ssh://github.com/holance/ktbus.git"
+                    url = "https://github.com/holance/ktbus"
+                }
+            }
         }
     }
     repositories {
