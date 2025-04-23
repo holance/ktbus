@@ -9,7 +9,6 @@ plugins {
 }
 
 group = "org.holance" // groupId is often set at the project level too
-version = System.getenv("VERSION") ?: "0.0.0"
 
 fun shouldPublishToGitHubPackages(): Boolean {
     return System.getenv("GITHUB_USERNAME") != null && System.getenv("GITHUB_TOKEN") != null
