@@ -1,3 +1,5 @@
+import com.vanniktech.maven.publish.JavadocJar
+import com.vanniktech.maven.publish.KotlinMultiplatform
 import com.vanniktech.maven.publish.SonatypeHost
 import org.jetbrains.kotlin.gradle.ExperimentalKotlinGradlePluginApi
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
@@ -25,12 +27,12 @@ fun shouldSign(): Boolean {
 }
 
 mavenPublishing {
-//    configure(
-//        KotlinJvm(
-//            javadocJar = JavadocJar.Javadoc(),
-//            sourcesJar = true,
-//        )
-//    )
+    configure(
+        KotlinMultiplatform(
+            javadocJar = JavadocJar.Javadoc(),
+            sourcesJar = true,
+        )
+    )
     coordinates(group.toString(), "ktbus", project.version.toString())
 
     pom {
