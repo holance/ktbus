@@ -4,6 +4,7 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.yield
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
@@ -24,6 +25,7 @@ class CoroutineScopeTests {
             val success = withTimeoutOrNull(10000) {
                 while (tests.any { it.event1Result.size < iteration }) {
                     delay(10)
+                    yield()
                 }
                 true
             } == true
@@ -66,7 +68,7 @@ class CoroutineScopeTests {
 
         @Subscribe(scope = DispatcherTypes.IO)
         suspend fun onEvent1(event: Event1) {
-            delay(Random.nextLong(1, 20))
+            delay(Random.nextLong(1, 10))
             mutex.withLock {
                 event1Result.add(event)
             }

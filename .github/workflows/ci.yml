@@ -57,7 +57,7 @@ jobs:
 
       - name: Run tests
         run: ./gradlew :lib:test --info
-        continue-on-error: true
+        continue-on-error: false
 
       - name: Upload Test Report
         uses: actions/upload-artifact@v4
