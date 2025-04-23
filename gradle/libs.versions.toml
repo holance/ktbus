@@ -2,16 +2,20 @@
 # https://docs.gradle.org/current/userguide/platforms.html#sub::toml-dependencies-format
 
 [versions]
-commons-math3 = "3.6.1"
-guava = "33.3.1-jre"
+agp = "8.5.2"
+kotlin = "2.1.10"
+android-minSdk = "24"
+android-compileSdk = "34"
 kotlinxCoroutinesCore = "1.10.2"
-jetbrainsKotlinJvm = "2.1.20"
+mavenPublish = "0.31.0"
+kotlinReflect = "2.1.20"
 
 [libraries]
-commons-math3 = { module = "org.apache.commons:commons-math3", version.ref = "commons-math3" }
-guava = { module = "com.google.guava:guava", version.ref = "guava" }
-kotlin-reflect = { group = "org.jetbrains.kotlin", name = "kotlin-reflect", version.ref = "jetbrainsKotlinJvm" }
+kotlin-test = { module = "org.jetbrains.kotlin:kotlin-test", version.ref = "kotlin" }
+kotlin-reflect = { group = "org.jetbrains.kotlin", name = "kotlin-reflect", version.ref = "kotlinReflect" }
 kotlinx-coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "kotlinxCoroutinesCore" }
 
 [plugins]
-kotlin-jvm = { id = "org.jetbrains.kotlin.jvm", version = "2.1.0" }
+androidLibrary = { id = "com.android.library", version.ref = "agp" }
+kotlinMultiplatform = { id = "org.jetbrains.kotlin.multiplatform", version.ref = "kotlin" }
+vanniktech-mavenPublish = { id = "com.vanniktech.maven.publish", version.ref = "mavenPublish" }

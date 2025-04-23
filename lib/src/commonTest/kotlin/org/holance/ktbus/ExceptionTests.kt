@@ -1,7 +1,6 @@
 package org.holance.ktbus
 
-import org.junit.jupiter.api.Assertions.assertEquals
-import org.junit.jupiter.api.Test
+import kotlin.test.*
 
 class KtBusExceptionTests {
     val bus = KtBus.getDefault()
@@ -77,7 +76,7 @@ class KtBusExceptionTests {
         @Subscribe
         fun onEvent1(event: Event1) {
             event1Result.add(event)
-            throw Exception("test")
+            throw Exception("commonTest")
         }
 
         @Subscribe

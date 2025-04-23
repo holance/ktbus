@@ -1,8 +1,6 @@
 package org.holance.ktbus
 
-import org.junit.jupiter.api.Assertions.assertEquals
-import org.junit.jupiter.api.Test
-import org.junit.jupiter.api.fail
+import kotlin.test.*
 
 class KtBusChannelTest {
     val bus = KtBus.getDefault()

@@ -71,6 +71,7 @@ jobs:
           name: build-artifacts-${{ steps.version_step.outputs.SemVer }}
           path: |
             lib/build/libs/*.jar
+            lib/build/outputs/aar/*.aar
 
       - name: Set up GitHub Packages repository
         run: |
