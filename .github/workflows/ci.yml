@@ -55,15 +55,19 @@ jobs:
       - name: Build with Gradle
         run: ./gradlew :lib:assemble
 
-      - name: Run tests
-        run: ./gradlew :lib:test --info
+      - name: Run JVM tests
+        run: ./gradlew :lib:jvmTest --info
+        continue-on-error: false
+
+      - name: Run Android Release tests
+        run: ./gradlew :lib:testReleaseUnitTest --info
         continue-on-error: false
 
       - name: Upload Test Report
         uses: actions/upload-artifact@v4
         with:
           name: test-results
-          path: lib/build/reports/tests/test/
+          path: lib/build/test-results
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
