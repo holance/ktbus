@@ -27,12 +27,6 @@ fun shouldSign(): Boolean {
 }
 
 mavenPublishing {
-    configure(
-        KotlinMultiplatform(
-            javadocJar = JavadocJar.Javadoc(),
-            sourcesJar = true,
-        )
-    )
     coordinates(group.toString(), "ktbus", project.version.toString())
 
     pom {

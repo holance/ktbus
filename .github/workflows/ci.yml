@@ -93,11 +93,11 @@ jobs:
           ORG_GRADLE_PROJECT_signingInMemoryKeyPassword: ${{ secrets.GPG_PRIVATE_KEY_PASS }}
 
       - name: Publish to Maven Central Packages
-        if: >-
-          (github.event_name == 'push' && github.event.ref=='refs/heads/main') ||
-          (github.event_name == 'pull_request' &&
-          github.event.pull_request.merged == true &&
-          github.event.pull_request.base.ref == 'main')
+#        if: >-
+#          (github.event_name == 'push' && github.event.ref=='refs/heads/main') ||
+#          (github.event_name == 'pull_request' &&
+#          github.event.pull_request.merged == true &&
+#          github.event.pull_request.base.ref == 'main')
         run: ./gradlew publishAndReleaseToMavenCentral --no-configuration-cache -Pversion=${{ steps.version_step.outputs.SemVer }}
         env:
           ORG_GRADLE_PROJECT_mavenCentralUsername: ${{ secrets.OSSRH_USERNAME }}
