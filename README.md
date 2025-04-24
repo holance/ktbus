@@ -73,8 +73,8 @@ n2 -- Response --> n1
 
 ```kotlin
 
-data class RequestSquareEvent(val value: Int)
-data class SquareResult(val value: Int)
+data class ComputeSquareEvent(val value: Int)
+data class ComputeSquareResult(val value: Int)
 
 class MathClass {
     val bus = KtBus.getDefault()
@@ -85,15 +85,15 @@ class MathClass {
         bus.unsubscribe(this)
     }
     @Subscribe
-    fun handleRequest(event: Request<RequestSquareEvent, SquareResult>) {
+    fun handleRequest(event: Request<ComputeSquareEvent, ComputeSquareResult>) {
         // Process event and create a response with type Event2
-        event.setResult(SquareResult(event.data.value * event.data.value))
+        event.setResult(ComputeSquareResult(event.data.value * event.data.value))
     }
 }
 
 val bus = KtBus.getDefault()
 
-bus.request<RequestSquareEvent, SquareResult>(RequestSquareEvent(5)) { result: Response<SquareResult> ->
+bus.request<ComputeSquareEvent, ComputeSquareResult>(ComputeSquareEvent(5)) { result: Response<ComputeSquareResult> ->
     when (result) {
         is Response.Success -> {
             assert(result.data.value == 25)

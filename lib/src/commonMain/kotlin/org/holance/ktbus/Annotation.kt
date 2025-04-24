@@ -15,7 +15,7 @@ import kotlin.reflect.KClass
  *                 This determines the threading context for message processing.
  *                 For example:
  *                 - [DispatcherTypes.Unconfined]: Executes the subscriber on the thread that published the event.
- *                 - [DispatcherTypes.Main]: Executes the subscriber on the main (UI) thread.
+ *                 - [DispatcherTypes.Main]: Executes the subscriber on the commonMain (UI) thread.
  *                 - [DispatcherTypes.IO]: Executes the subscriber on a thread optimized for IO operations.
  *                 - [DispatcherTypes.Default]: Executes the subscriber on a background thread.
  *                 - [DispatcherTypes.Immediate]: Executes the subscriber in the same call stack.
