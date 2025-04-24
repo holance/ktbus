@@ -9,6 +9,26 @@ A simple EventBus implementation based on Kotlin SharedFlow and inspired by
 
 ## Concept and Usages
 
+### Setup
+
+Use MavenCentral in `settings.gradle.kts`:
+
+```kotlin
+repositories {
+    mavenCentral()
+}
+```
+
+Include in application `build.gradle.kts`:
+
+```kotlin
+dependencies {
+    implementation("org.holance:ktbus:{version}")
+}
+```
+
+Make sure to replace `{version}` with the version of the library.
+
 ### Publish/Subscribe
 
 ```mermaid
