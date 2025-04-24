@@ -537,30 +537,38 @@ class KtBus(val config: KtBusConfig = KtBusConfig()) {
         timeout: Duration = 5.seconds,
         onResult: (Response<E>) -> Unit,
     ) {
-        val request = Request<T, E>(data = event, bus = this, channel = channel)
-        val responseClass: KClass<ResponseEvent<E>> =
-            ResponseEvent::class as KClass<ResponseEvent<E>>
-        val handler =
-            getOrCreateHandler<ResponseEvent<E>>(responseClass, channel)
-        val responseListenerJob: Deferred<ResponseEvent<E>> =
-            unconfinedScope.async {
-                handler.events.filter {
-                    it.correlationId == request.requestId
-                }.first()
+        try {
+            val request = Request<T, E>(data = event, bus = this, channel = channel)
+            val responseClass: KClass<ResponseEvent<E>> =
+                ResponseEvent::class as KClass<ResponseEvent<E>>
+            val handler =
+                getOrCreateHandler<ResponseEvent<E>>(responseClass, channel)
+            val responseListenerJob: Deferred<ResponseEvent<E>> =
+                unconfinedScope.async {
+                    handler.events.filter {
+                        it.correlationId == request.requestId
+                    }.first()
+                }
+
+            yield()
+            post(request, channel)
+
+            val resultEvent = withTimeoutOrNull(timeout) {
+                responseListenerJob.await()
             }
-
-        yield()
-        post(request, channel)
-
-        val resultEvent = withTimeoutOrNull(timeout) {
-            responseListenerJob.await()
-        }
-        if (resultEvent?.data != null) {
-            onResult(Response.Success(resultEvent.data))
-        } else if (resultEvent?.error != null) {
-            onResult(Response.Error(resultEvent.error))
-        } else {
-            onResult(Response.Timeout)
+            if (resultEvent == null) {
+                onResult(Response.Timeout)
+            } else if (resultEvent.data != null) {
+                onResult(Response.Success(resultEvent.data))
+            } else if (resultEvent.error != null) {
+                onResult(Response.Error(message = resultEvent.error))
+            } else if (resultEvent.exception != null) {
+                onResult(Response.Error(exception = resultEvent.exception))
+            } else {
+                onResult(Response.Error("Unknown error"))
+            }
+        } catch (e: Exception) {
+            onResult(Response.Error(exception = e))
         }
     }
 

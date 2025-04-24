@@ -6,7 +6,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 // Helper data class for the request function's result
 sealed class Response<out R> {
     data class Success<out R>(val data: R) : Response<R>()
-    data class Error(val message: String, val exception: Throwable? = null) :
+    data class Error(val message: String? = null, val exception: Throwable? = null) :
         Response<Nothing>()
 
     object Timeout : Response<Nothing>()
@@ -113,11 +113,52 @@ data class Request<T, E>(
             return false
         }
     }
+
+    /**
+     * Sets the exception for this RequestEvent.
+     *
+     * This function attempts to set the provided [exception] as the result of the operation
+     * represented by this RequestEvent. If a result or an error has already been set,
+     * it throws an [IllegalStateException] to indicate that the state of the event is
+     * no longer mutable.
+     *
+     * @param exception The [Throwable] representing the exception to set.
+     * @throws IllegalStateException If a result or error has already been set for this RequestEvent.
+     */
+    fun setException(exception: Throwable) {
+        if (trySetException(exception).not()) {
+            throw IllegalStateException("Result or error already set for this RequestEvent")
+        }
+    }
+
+    /**
+     * Attempts to set an exception as the result of an operation and send it through the event bus.
+     *
+     * This function uses an atomic boolean flag (`resultSent`) to ensure that only one result (either
+     * a successful value or an exception) is ever sent. If a result has already been sent, subsequent
+     * calls to this function or [trySetResult] will be ignored.
+     *
+     * @param exception The throwable exception to be sent as the result.
+     * @return `true` if the exception was successfully set and sent; `false` if a result (either a
+     *         value or an exception) has already been sent.
+     *
+     * @see trySetResult
+     */
+    fun trySetException(exception: Throwable): Boolean {
+        if (resultSent.compareAndSet(false, true)) {
+            val response = ResponseEvent<E>(requestId, exception = exception)
+            bus.post(response, channel)
+            return true
+        } else {
+            return false
+        }
+    }
 }
 
 // Response event - carries data and the ID of the request it's responding to
 internal data class ResponseEvent<E>(
     val correlationId: String, // Matches the requestId of the RequestEvent
     val data: E? = null,
-    val error: String? = null
+    val error: String? = null,
+    val exception: Throwable? = null
 )
