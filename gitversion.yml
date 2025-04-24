@@ -1,26 +1,13 @@
-next-version: 1.0.0
+workflow: GitFlow/v1
+mode: ContinuousDeployment
+
+next-version: 1.1.0
 branches:
   develop:
     regex: ^develop
-    mode: ContinuousDelivery
-    label: alpha
-    increment: Minor
-    track-merge-target: true
-    source-branches: []
-    tracks-release-branches: true
-    is-release-branch: false
-    is-main-branch: false
-    pre-release-weight: 0
     
   release:
     regex: ^release
-    label: beta
-    increment: Minor
-    is-release-branch: false
-    is-main-branch: false
 
   main:
     regex: ^main
-    mode: ContinuousDelivery
-    is-release-branch: true
-    is-main-branch: true
