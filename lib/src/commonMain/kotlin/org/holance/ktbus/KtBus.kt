@@ -5,24 +5,14 @@ package org.holance.ktbus
 
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.async
 import kotlinx.coroutines.channels.BufferOverflow
-import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
-import kotlinx.coroutines.flow.SharedFlow
-import kotlinx.coroutines.flow.asSharedFlow
-import kotlinx.coroutines.flow.filter
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
-import kotlinx.coroutines.yield
 import java.lang.reflect.Method
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
@@ -33,7 +23,6 @@ import kotlin.reflect.KFunction
 import kotlin.reflect.KParameter
 import kotlin.reflect.full.callSuspend
 import kotlin.reflect.full.createInstance
-import kotlin.reflect.full.declaredMembers
 import kotlin.reflect.full.findAnnotation
 import kotlin.reflect.full.memberFunctions
 import kotlin.reflect.jvm.javaMethod
@@ -84,13 +73,32 @@ class KtBus(val config: KtBusConfig = KtBusConfig()) {
         }
     }
 
+    data class DataWrapper<T : Any>(val data: T, val channel: String)
+
+    /** Internal wrapper for requests to include a unique ID */
+    data class RequestWrapper<R : Any>(
+        val id: String,
+        val channel: String,
+        val payload: Request<R> // The actual user request object
+    )
+
+    /** Internal wrapper for responses */
+    data class ResponseWrapper<R : Any>(
+        val requestId: String,
+        val channel: String,
+        val data: R?,
+        val error: Throwable? = null
+    )
+
     // Stores a MutableSharedFlow for each event/request type KClass.
-    private val flows = ConcurrentHashMap<KClass<*>, MutableSharedFlow<*>>()
-    private val requestFlows =
-        ConcurrentHashMap<KClass<*>, MutableSharedFlow<RequestWrapper<*>>>()
+    private val flows = ConcurrentHashMap<KClass<*>, MutableSharedFlow<DataWrapper<*>>>()
 
     // Stores active subscription/handler jobs managed via annotations. Maps subscriber instance to its Job list.
     private val subscriptions = ConcurrentHashMap<Any, MutableList<Job>>()
+
+    // Stores a MutableSharedFlow for each request type.
+    private val requestFlows =
+        ConcurrentHashMap<KClass<*>, MutableSharedFlow<RequestWrapper<*>>>()
 
     // Stores active request handlers. Maps Request KClass to the handler function and its target instance.
     // Note: This simple map allows only one handler per request type globally.
@@ -101,14 +109,14 @@ class KtBus(val config: KtBusConfig = KtBusConfig()) {
     val pendingRequests =
         ConcurrentHashMap<String, CompletableDeferred<ResponseWrapper<*>>>()
 
-    fun <T : Any> getFlow(dataType: KClass<out T>): MutableSharedFlow<T> {
+    fun <T : Any> getFlow(dataType: KClass<out T>): MutableSharedFlow<DataWrapper<T>> {
         return flows.computeIfAbsent(dataType) {
-            MutableSharedFlow<T>(
+            MutableSharedFlow<DataWrapper<*>>(
                 replay = 1,
                 extraBufferCapacity = config.bufferCapacity,
                 onBufferOverflow = config.onBufferOverflow
             )
-        } as MutableSharedFlow<T>
+        } as MutableSharedFlow<DataWrapper<T>>
     }
 
     fun <R : Any> getRequestFlow(dataType: KClass<out R>): MutableSharedFlow<RequestWrapper<*>> {
@@ -118,6 +126,22 @@ class KtBus(val config: KtBusConfig = KtBusConfig()) {
                 extraBufferCapacity = config.bufferCapacity,
                 onBufferOverflow = config.onBufferOverflow
             )
+        }
+    }
+
+    private suspend fun postImpl(
+        event: Any,
+        channel: String = DefaultChannel,
+        removeSticky: Boolean = true
+    ) {
+        if (event is RequestWrapper<*> || event is ResponseWrapper<*>) {
+            logger?.w("Warning: Attempting to post internal wrapper type directly. Use request() method for requests.")
+            return
+        }
+        val flow = getFlow(event::class)
+        flow.emit(DataWrapper(event, channel))
+        if (removeSticky) {
+            flow.resetReplayCache()
         }
     }
 
@@ -159,23 +183,31 @@ class KtBus(val config: KtBusConfig = KtBusConfig()) {
             DispatcherTypes.IO -> ioScope
             DispatcherTypes.Unconfined -> unconfinedScope
         }
+        val channel = if (annotation.channelFactory != DefaultChannelFactory::class) {
+            annotation.channelFactory.createInstance().createChannel(target)
+        } else {
+            annotation.channel
+        }
         // Ensure it's a specific, non-internal type
         if (eventType != Any::class && eventType != RequestWrapper::class && eventType != ResponseWrapper::class) {
             val specificFlow = getFlow(eventType as KClass<Any>)
             val job = scope.launch {
                 specificFlow.collect { event ->
+                    if (event.channel != channel) {
+                        return@collect
+                    }
                     try {
                         if (function.isSuspend) {
                             if (function.javaMethod != null) {
-                                invokeSuspendFunction(function.javaMethod!!, target, event)
+                                invokeSuspendFunction(function.javaMethod!!, target, event.data)
                             } else {
-                                function.callSuspend(target, event)
+                                function.callSuspend(target, event.data)
                             }
                         } else {
                             if (function.javaMethod != null) {
-                                function.javaMethod?.invoke(target, event)
+                                function.javaMethod?.invoke(target, event.data)
                             } else {
-                                function.call(target, event)
+                                function.call(target, event.data)
                             }
                         }
                     } catch (e: Throwable) {
@@ -212,7 +244,9 @@ class KtBus(val config: KtBusConfig = KtBusConfig()) {
             function.returnType.jvmErasure // KClass of the response (e.g., MyResponse::class)
 
         // Ensure it's a Request<*> type and returns a specific type
-        if (Request::class.java.isAssignableFrom(requestType.java) && returnType != Unit::class && returnType != Any::class) {
+        if (Request::class.java.isAssignableFrom(requestType.java)
+            && returnType != Unit::class && returnType != Any::class
+        ) {
 
             // --- Register the Handler ---
             // Note: Overwrites any existing handler for this request type!
@@ -233,15 +267,19 @@ class KtBus(val config: KtBusConfig = KtBusConfig()) {
                 DispatcherTypes.Unconfined -> unconfinedScope
             }
             val source = "${target::class.simpleName}.${function.name}"
+            val channel = if (annotation.channelFactory != DefaultChannelFactory::class) {
+                annotation.channelFactory.createInstance().createChannel(target)
+            } else {
+                annotation.channel
+            }
 
             val job = scope.launch { // Use the provided scope for the collector
                 requestFlow.collect { requestWrapperUntyped ->
                     // We receive RequestWrapper<*> here, need to ensure it's the correct type
-                    // Check if the payload matches the type this handler expects
-                    if (requestWrapperUntyped !is RequestWrapper<*>) {
-                        return@collect // Ignore if not a RequestWrapper
-                    }
                     if (requestType.isInstance(requestWrapperUntyped.payload)) {
+                        if (requestWrapperUntyped.channel != channel) {
+                            return@collect
+                        }
                         val requestWrapper =
                             requestWrapperUntyped as RequestWrapper<Any> // Safe cast after check
                         val requestId = requestWrapper.id
@@ -288,14 +326,14 @@ class KtBus(val config: KtBusConfig = KtBusConfig()) {
 
                         // Create the response wrapper
                         val responseWrapper =
-                            ResponseWrapper(requestId, responseData, responseError)
+                            ResponseWrapper(requestId, channel, responseData, responseError)
 
                         // Complete the deferred to unblock the original request() call
                         @Suppress("UNCHECKED_CAST")
                         (deferred as CompletableDeferred<ResponseWrapper<Any>>).complete(
                             responseWrapper
                         )
-                    } // else: type mismatch, ignore (shouldn't happen with per-type flows)
+                    }
                 }
             }
             jobs.add(job) // Add collector job to the list for cancellation on unsubscribe
@@ -315,40 +353,19 @@ class KtBus(val config: KtBusConfig = KtBusConfig()) {
      *
      * @param event The event to post. This can be any object.
      * @param channel The channel to post the event to. Defaults to [DefaultChannel]. Currently unused, but reserved for future use.
-     * @param removeSticky If true (default), clears the replay cache of the associated flow after a successful post, effectively removing any sticky behavior. If false, the event will remain sticky and will be replayed to new subscribers.
-     * @return `true` if the event was successfully emitted to the flow, `false` otherwise.
      *
      * **Behavior:**
      *
      * - **Internal Wrapper Prevention:**  Prevents the direct posting of internal wrapper types (`RequestWrapper` and `ResponseWrapper`).
      *   This ensures that these wrappers are only used internally by the request-response mechanism and not directly by external code.
-     *   If an attempt is made to post a wrapper, a warning is logged, and `false` is returned.
+     *   If an attempt is made to post a wrapper, a warning is logged, and returned.
      *
-     * - **Sticky Event Management:** If `removeSticky` is `true` and the event was successfully emitted, the flow's replay cache is cleared using `flow.resetReplayCache()`.
-     *   This ensures that the event is not replayed to any new subscribers (i.e., it is not "sticky").
-     *   If `removeSticky` is `false`, the event will remain in the replay cache and will be delivered to new subscribers.
-     *
-     * - **Failure Handling:** If `flow.tryEmit(event)` returns `false`, it means the event could not be immediately emitted (e.g., due to backpressure).
-     *   In this case, the function returns `false`.
-     *
-     * **Note:**
-     * - The 'channel' parameter is currently unused in the implementation but may be employed for multiplexing in the future.
+     * - **Sticky Event Management:** Post will remove sticky event automatically.
      */
-    fun post(event: Any, channel: String = DefaultChannel, removeSticky: Boolean = true): Boolean {
-        // Ensure we don't accidentally post internal wrappers
-        if (event is RequestWrapper<*> || event is ResponseWrapper<*>) {
-            logger?.w("Warning: Attempting to post internal wrapper type directly. Use request() method for requests.")
-            return false
+    fun post(event: Any, channel: String = DefaultChannel) {
+        runBlocking {
+            postImpl(event, channel)
         }
-        // Find the flow for the specific event class and try emitting
-        val flow = getFlow(event::class)
-        if (flow.tryEmit(event)) {
-            if (removeSticky) {
-                flow.resetReplayCache()
-            }
-            return true
-        }
-        return false
     }
 
     /**
@@ -359,10 +376,53 @@ class KtBus(val config: KtBusConfig = KtBusConfig()) {
      *
      * @param event The event to be posted. This can be any object.
      * @param channel The channel to post the event to. Defaults to `DefaultChannel`.
-     * @return `true` if the event was successfully posted, `false` otherwise.
      */
-    fun postSticky(event: Any, channel: String = DefaultChannel): Boolean {
-        return post(event, channel, false)
+    fun postSticky(event: Any, channel: String = DefaultChannel) {
+        runBlocking {
+            postImpl(event, channel, false)
+        }
+    }
+
+    /**
+     * Attempts to post an event to a specific channel.
+     *
+     * This function is used to emit an event to a shared flow associated with its class type.
+     * It handles internal wrapper types, sticky events, and ensures that the event is emitted successfully.
+     *
+     * @param event The event to be posted. It must not be an internal wrapper type (RequestWrapper or ResponseWrapper).
+     * @param channel The channel to which the event belongs. Defaults to [DefaultChannel].
+     *                While the parameter is present, it's not directly utilized in this function's logic.
+     *                Its usage is implied to be managed within `getFlow()` method.
+     * @param removeSticky If true, the sticky event (if any) for this event type will be removed from the replay cache after a successful post. Defaults to true.
+     * @return True if the event was successfully posted, false otherwise.
+     *
+     * @throws IllegalStateException if the associated flow is not found for the event.
+     * @throws ClassCastException if trying to emit incorrect event type to the flow.
+     *
+     * @see RequestWrapper
+     * @see ResponseWrapper
+     * @see MutableSharedFlow.tryEmit
+     * @see MutableSharedFlow.resetReplayCache
+     */
+    fun tryPost(
+        event: Any,
+        channel: String = DefaultChannel,
+        removeSticky: Boolean = true
+    ): Boolean {
+        // Ensure we don't accidentally post internal wrappers
+        if (event is RequestWrapper<*> || event is ResponseWrapper<*>) {
+            logger?.w("Warning: Attempting to post internal wrapper type directly. Use request() method for requests.")
+            return false
+        }
+        // Find the flow for the specific event class and try emitting
+        val flow = getFlow(event::class)
+        if (flow.tryEmit(DataWrapper(event, channel))) {
+            if (removeSticky) {
+                flow.resetReplayCache()
+            }
+            return true
+        }
+        return false
     }
 
     /**
@@ -402,14 +462,11 @@ class KtBus(val config: KtBusConfig = KtBusConfig()) {
      * @see RequestWrapper
      * @see ResponseWrapper
      */
-    suspend fun postAsync(event: Any, channel: String = DefaultChannel) {
-        if (event is RequestWrapper<*> || event is ResponseWrapper<*>) {
-            println("Warning: Attempting to post internal wrapper type directly. Use request() method for requests.")
-            return
-        }
-        val flow = getFlow(event::class)
-        flow.emit(event)
-        flow.resetReplayCache()
+    suspend fun postAsync(
+        event: Any,
+        channel: String = DefaultChannel
+    ) {
+        postImpl(event, channel)
     }
 
     // endregion
@@ -429,13 +486,32 @@ class KtBus(val config: KtBusConfig = KtBusConfig()) {
      *                Defaults to 5 seconds.
      * @return The response object of type [R].
      * @throws Exception if the request fails or times out.
+     *
+     * @sample
+     * ```kotlin
+     * data class MyRequest(val data: String) : Request<MyResponse>
+     * data class MyResponse(val result: String)
+     *      * // Example usage:
+     * val myRequest = MyRequest("some data")
+     * try {
+     *     val response = request(myRequest, 10.seconds)
+     *     println("Received response: ${response.result}")
+     * } catch (e: NoRequestHandlerException) {
+     *     println("Error: No handler found for MyRequest")
+     * } catch (e: RequestTimeoutException) {
+     *     println("Error: Request timed out")
+     * } catch (e: RequestException) {
+     *    println("Error: Request failed: ${e.cause}")
+     * }
+     * ```
      */
     inline fun <reified R : Any> request(
         request: Request<R>,
+        channel: String = DefaultChannel,
         timeout: Duration = 5.seconds // Default 5 second timeout
     ): R {
         runBlocking {
-            requestAsync(request, timeout)
+            requestAsync(request, channel, timeout)
         }.also {
             return it
         }
@@ -464,20 +540,24 @@ class KtBus(val config: KtBusConfig = KtBusConfig()) {
      *
      * // Example usage:
      * val myRequest = MyRequest("some data")
-     * try {
-     *     val response = requestAsync(myRequest, 10.seconds)
-     *     println("Received response: ${response.result}")
-     * } catch (e: NoRequestHandlerException) {
-     *     println("Error: No handler found for MyRequest")
-     * } catch (e: RequestTimeoutException) {
-     *     println("Error: Request timed out")
-     * } catch (e: RequestException) {
-     *    println("Error: Request failed: ${e.cause}")
+     *
+     * scope.launch {
+     *      try {
+     *          val response = requestAsync(myRequest, 10.seconds)
+     *          println("Received response: ${response.result}")
+     *      } catch (e: NoRequestHandlerException) {
+     *          println("Error: No handler found for MyRequest")
+     *      } catch (e: RequestTimeoutException) {
+     *          println("Error: Request timed out")
+     *      } catch (e: RequestException) {
+     *         println("Error: Request failed: ${e.cause}")
+     *      }
      * }
      * ```
      */
     suspend inline fun <reified R : Any> requestAsync(
         request: Request<R>,
+        channel: String = DefaultChannel,
         timeout: Duration = 5.seconds // Default 5 second timeout
     ): R {
         val requestType = request::class
@@ -493,7 +573,7 @@ class KtBus(val config: KtBusConfig = KtBusConfig()) {
         @Suppress("UNCHECKED_CAST") // Cast necessary due to heterogeneous map value type
         pendingRequests[requestId] = deferred as CompletableDeferred<ResponseWrapper<*>>
 
-        val requestWrapper = RequestWrapper(requestId, request)
+        val requestWrapper = RequestWrapper(requestId, channel, request)
 
         try {
             // Post the wrapped request to the flow corresponding to the *original* request payload type
