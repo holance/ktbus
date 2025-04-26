@@ -8,6 +8,9 @@ branches:
     
   release:
     regex: ^release
-
+    is-release-branch: false
+    
   main:
     regex: ^main
+    is-release-branch: true
+    is-mainline: true
