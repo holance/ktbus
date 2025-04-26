@@ -491,7 +491,7 @@ class KtBus(val config: KtBusConfig = KtBusConfig()) {
      * @return The response object of type [R].
      * @throws NoRequestHandlerException If no handler is registered for the given request type.
      * @throws RequestTimeoutException If the request times out before a response is received.
-     * @throws RequestException If the request handler returns an error or null data.
+     * @throws RequestException If the request handler throws an error or null data.
      *
      * @sample
      * ```kotlin
@@ -537,7 +537,7 @@ class KtBus(val config: KtBusConfig = KtBusConfig()) {
      * @return The response data of type [R].
      * @throws NoRequestHandlerException If no handler is registered for the given request type.
      * @throws RequestTimeoutException If the request times out before a response is received.
-     * @throws RequestException If the request handler returns an error or null data.
+     * @throws RequestException If the request handler throws an error or null data.
      *
      * @sample
      * ```kotlin
