@@ -9,6 +9,26 @@ A simple EventBus implementation based on Kotlin SharedFlow and inspired by
 
 ## Concept and Usages
 
+### Setup
+
+Use MavenCentral in `settings.gradle.kts`:
+
+```kotlin
+repositories {
+    mavenCentral()
+}
+```
+
+Include in application `build.gradle.kts`:
+
+```kotlin
+dependencies {
+    implementation("org.holance:ktbus:{version}")
+}
+```
+
+Make sure to replace `{version}` with the version of the library.
+
 ### Publish/Subscribe
 
 ```mermaid
@@ -73,7 +93,7 @@ n2 -- Response --> n1
 
 ```kotlin
 
-data class ComputeSquareEvent(val value: Int)
+data class ComputeSquareRequest(val value: Int) : Request<ComputeSquareResult>
 data class ComputeSquareResult(val value: Int)
 
 class MathClass {
@@ -84,33 +104,33 @@ class MathClass {
     fun tearDown() {
         bus.unsubscribe(this)
     }
-    @Subscribe
-    fun handleRequest(event: Request<ComputeSquareEvent, ComputeSquareResult>) {
-        // Process event and create a response with type Event2
-        event.setResult(ComputeSquareResult(event.data.value * event.data.value))
+    @RequestHandler
+    fun computeSquare(event: ComputeSquareRequest) : ComputeSquareResult {
+        return ComputeSquareResult(event.value * event.value)
     }
 }
 
 val bus = KtBus.getDefault()
 
-bus.request<ComputeSquareEvent, ComputeSquareResult>(ComputeSquareEvent(5)) { result: Response<ComputeSquareResult> ->
-    when (result) {
-        is Response.Success -> {
-            assert(result.data.value == 25)
-        }
-        is Response.Error -> {
-            println("Error: ${result.error}")
-        }
-        is Response.Timeout -> {
-            println("Timeout")
-        }
-    }
+try {
+    val result = bus.request(ComputeSquareRequest(5))    
+    assert(result.value == 25)
 }
+catch (e: RequestException) {
+    // Handle request handler exception
+}
+catch (e: NoRequestHandlerException) {
+    // Handle no request handler exception
+}
+catch (e: RequestTimeoutException) {
+    // Handle request timeout exception
+}
+
 ```
 
 ### Use Channel
 
-#### Compile time Channel
+#### Compile-Time Channel
 
 ```kotlin
 data class SomeEvent(val value: Int)

@@ -3,25 +3,18 @@
 
 package org.holance.ktbus
 
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.async
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.MutableSharedFlow
-import kotlinx.coroutines.flow.SharedFlow
-import kotlinx.coroutines.flow.asSharedFlow
-import kotlinx.coroutines.flow.filter
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
-import kotlinx.coroutines.yield
 import java.lang.reflect.Method
+import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.coroutines.resumeWithException
 import kotlin.coroutines.suspendCoroutine
@@ -30,13 +23,14 @@ import kotlin.reflect.KFunction
 import kotlin.reflect.KParameter
 import kotlin.reflect.full.callSuspend
 import kotlin.reflect.full.createInstance
-import kotlin.reflect.full.declaredMembers
 import kotlin.reflect.full.findAnnotation
+import kotlin.reflect.full.memberFunctions
 import kotlin.reflect.jvm.javaMethod
+import kotlin.reflect.jvm.jvmErasure
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.seconds
 
-typealias SubscriptionId = Int
+const val DefaultChannel = ""
 
 enum class DispatcherTypes {
     Main,
@@ -46,7 +40,7 @@ enum class DispatcherTypes {
 }
 
 data class KtBusConfig(
-    val bufferCapacity: Int = 10,
+    val bufferCapacity: Int = 100,
     val onBufferOverflow: BufferOverflow = BufferOverflow.SUSPEND
 )
 
@@ -79,192 +73,76 @@ class KtBus(val config: KtBusConfig = KtBusConfig()) {
         }
     }
 
-    // region Private classes
-    private class IdGen {
-        private val queue = ArrayDeque<Int>()
-        fun getId(): Int? {
-            return queue.removeFirstOrNull()
-        }
+    data class DataWrapper<T : Any>(val data: T, val channel: String)
 
-        fun releaseId(id: Int) {
-            queue.addLast(id)
-        }
-
-        @Suppress("unused")
-        fun clear() {
-            queue.clear()
-        }
-
-        val size: Int get() = queue.size
-    }
-
-    private interface IEventHandler {
-        fun hasSubscribers(): Boolean
-    }
-
-    private class EventHandler<T : Any>(
-        private val typeName: String,
-        bufferCapacity: Int,
-        onBufferOverflow: BufferOverflow
-    ) : IEventHandler {
-        private class Subscriptions<T : Any>(
-            val events: SharedFlow<T>,
-            val scope: CoroutineScope,
-            val idGen: IdGen = IdGen(),
-            val subJobs: MutableList<Job?> = mutableListOf()
-        ) {
-            private val mutex: Mutex = Mutex()
-
-            suspend fun add(onEvent: (T) -> Unit, source: String): Int {
-                val job = scope.launch {
-                    events.collect { event: T ->
-                        if (traceFunctionInvocation) {
-                            logger?.d("Invoking event handler [$source]: ${event::class.simpleName}")
-                        }
-                        onEvent(event)
-                    }
-                }
-                mutex.withLock {
-                    val id = idGen.getId() ?: subJobs.size
-                    if (id == subJobs.size) {
-                        subJobs.add(job)
-                    } else {
-                        subJobs[id] = job
-                    }
-                    return id
-                }
-            }
-
-            suspend fun remove(id: SubscriptionId): Boolean {
-                mutex.withLock {
-                    val job = subJobs[id]
-                    subJobs[id] = null
-                    idGen.releaseId(id)
-                    job?.cancel()
-                    if (idGen.size == subJobs.size) {
-                        return true
-                    }
-                }
-                return false
-            }
-        }
-
-        private val subscribers =
-            mutableMapOf<CoroutineScope, Subscriptions<T>>()
-        private val _events: MutableSharedFlow<T> = MutableSharedFlow(
-            replay = 1,
-            extraBufferCapacity = bufferCapacity,
-            onBufferOverflow = onBufferOverflow
-        )
-        val events get() = _events.asSharedFlow()
-        private val mutex: Mutex = Mutex()
-
-        init {
-            logger?.d("Created event handler for class $typeName")
-        }
-
-        suspend fun post(event: T, removeStickyEvent: Boolean = true) {
-            if (traceFunctionInvocation) {
-                logger?.d("Posting event: ${event::class.simpleName}")
-            }
-            _events.emit(event)
-            if (removeStickyEvent) {
-                removeStickyEvent()
-            }
-        }
-
-        suspend fun postSticky(event: T) {
-            post(event, false)
-        }
-
-        fun removeStickyEvent() {
-            _events.resetReplayCache()
-        }
-
-        fun subscribe(
-            scope: CoroutineScope,
-            onEvent: (T) -> Unit,
-            source: String
-        ): SubscriptionId {
-            return runBlocking {
-                mutex.withLock {
-                    val subscriberSet =
-                        subscribers.getOrPut(scope) { Subscriptions(events, scope) }
-                    val id: SubscriptionId = subscriberSet.add(onEvent, source)
-                    logger?.d("Subscribed event to id $id in class $typeName; scope $scope")
-                    id
-                }
-            }
-        }
-
-        fun unsubscribe(scope: CoroutineScope, id: SubscriptionId) {
-            logger?.d("Unsubscribing from id $id in class $typeName; scope $scope")
-            runBlocking {
-                mutex.withLock {
-                    val subscriberSet = subscribers[scope] ?: return@withLock
-                    if (subscriberSet.remove(id)) {
-                        logger?.d("Unsubscribed scope $scope in class $typeName")
-                        subscribers.remove(scope)
-                    }
-                }
-            }
-        }
-
-        override fun hasSubscribers(): Boolean {
-            return subscribers.isNotEmpty()
-        }
-    }
-
-    private data class FunctionInfo(
-        val id: SubscriptionId,
+    /** Internal wrapper for requests to include a unique ID */
+    data class RequestWrapper<R : Any>(
+        val id: String,
         val channel: String,
-        val scope: CoroutineScope,
-        val clazz: KClass<*>
+        val payload: Request<R> // The actual user request object
     )
-    //endregion
 
-    // region Private properties
-    private val handlers = ConcurrentHashMap<KClass<*>, ConcurrentHashMap<String, IEventHandler>>()
-    private val objectHandlerMapping =
-        ConcurrentHashMap<Any, MutableList<FunctionInfo>>()
-    //endregion
+    /** Internal wrapper for responses */
+    data class ResponseWrapper<R : Any>(
+        val requestId: String,
+        val channel: String,
+        val data: R?,
+        val error: Throwable? = null
+    )
 
-    // region Private functions
-    private fun <T : Any> getOrCreateHandler(clazz: KClass<T>, channel: String): EventHandler<T> {
-        val chHandlers = handlers.getOrPut(clazz) {
-            ConcurrentHashMap<String, IEventHandler>()
-        }
-        return chHandlers.getOrPut(channel) {
-            EventHandler<T>(
-                clazz.simpleName.toString(),
-                config.bufferCapacity,
-                config.onBufferOverflow
+    // Stores a MutableSharedFlow for each event/request type KClass.
+    private val flows = ConcurrentHashMap<KClass<*>, MutableSharedFlow<DataWrapper<*>>>()
+
+    // Stores active subscription/handler jobs managed via annotations. Maps subscriber instance to its Job list.
+    private val subscriptions = ConcurrentHashMap<Any, MutableList<Job>>()
+
+    // Stores a MutableSharedFlow for each request type.
+    private val requestFlows =
+        ConcurrentHashMap<KClass<*>, MutableSharedFlow<RequestWrapper<*>>>()
+
+    // Stores active request handlers.
+    val requestHandlers =
+        ConcurrentHashMap<KClass<*>, ConcurrentHashMap<Any, MutableSet<String>>>()
+    private val requestTargetTypeMappings = ConcurrentHashMap<Any, MutableList<KClass<*>>>()
+
+    // Stores pending requests waiting for a response. Maps Request ID to its CompletableDeferred.
+    val pendingRequests =
+        ConcurrentHashMap<String, CompletableDeferred<ResponseWrapper<*>>>()
+
+    fun <T : Any> getFlow(dataType: KClass<out T>): MutableSharedFlow<DataWrapper<T>> {
+        return flows.computeIfAbsent(dataType) {
+            MutableSharedFlow<DataWrapper<*>>(
+                replay = 1,
+                extraBufferCapacity = config.bufferCapacity,
+                onBufferOverflow = config.onBufferOverflow
             )
-        } as EventHandler<T>
+        } as MutableSharedFlow<DataWrapper<T>>
     }
 
-    private fun <T : Any> getHandler(clazz: KClass<T>, channel: String): EventHandler<T>? {
-        val chHandlers = handlers.getOrDefault(clazz, null) ?: return null
-        return chHandlers.getOrDefault(channel, null) as EventHandler<T>
+    fun <R : Any> getRequestFlow(dataType: KClass<out R>): MutableSharedFlow<RequestWrapper<*>> {
+        return requestFlows.computeIfAbsent(dataType) {
+            MutableSharedFlow<RequestWrapper<*>>(
+                replay = 1,
+                extraBufferCapacity = config.bufferCapacity,
+                onBufferOverflow = config.onBufferOverflow
+            )
+        }
     }
 
-    private fun <T : Any> subscribe(
-        clazz: KClass<T>, obj: Any, channel: String, onEvent: (T) -> Unit,
-        scope: CoroutineScope, source: String
+    private suspend fun postImpl(
+        event: Any,
+        channel: String = DefaultChannel,
+        removeSticky: Boolean = true
     ) {
-        val handler = getOrCreateHandler(clazz, channel)
-        val id = handler.subscribe(scope, onEvent, source)
-        objectHandlerMapping[obj]?.add(FunctionInfo(id, channel, scope, clazz))
-    }
-
-    private fun <T : Any> unsubscribe(
-        clazz: KClass<T>,
-        channel: String,
-        id: SubscriptionId,
-        scope: CoroutineScope
-    ) {
-        val handler = getHandler(clazz, channel)
-        handler?.unsubscribe(scope, id)
+        if (event is RequestWrapper<*> || event is ResponseWrapper<*>) {
+            logger?.w("Warning: Attempting to post internal wrapper type directly. Use request() method for requests.")
+            return
+        }
+        val flow = getFlow(event::class)
+        flow.emit(DataWrapper(event, channel))
+        if (removeSticky) {
+            flow.resetReplayCache()
+        }
     }
 
     private suspend fun invokeSuspendFunction(
@@ -280,407 +158,534 @@ class KtBus(val config: KtBusConfig = KtBusConfig()) {
             }
         }
     }
-    // endregion
 
-    // region Public functions
-    /**
-     * Posts an event to a specified channel synchronously.
-     *
-     * This function provides a synchronous way to post an event to a channel. It internally uses `runBlocking`
-     * to ensure the event is enqueued into a sharedFlow object before the function returns.
-     *
-     * Note: If there is a sticky event previously posted to the same channel, the sticky event will be cleared after posting.*
-     *
-     * @param event The event to be posted. Must be a non-null object.
-     * @param channel The name of the channel to post the event to. Defaults to `DEFAULT_CHANNEL`.
-     * @param scope The coroutine scope in which to run the `postAsync` operation within `runBlocking`. Defaults to `unconfinedScope`.
-     * @param T The type of the event.
-     *
-     * @throws Exception if `postAsync` throws an exception.
-     *
-     * @see postAsync For the asynchronous counterpart of this function.
-     */
-    fun <T : Any> post(
-        event: T,
-        channel: String = DefaultChannelFactory.DEFAULT_CHANNEL,
-        scope: CoroutineScope = unconfinedScope
+    /** Processes a method annotated with @Subscribe */
+    private fun processSubscriber(
+        target: Any,
+        function: KFunction<*>,
+        annotation: Subscribe,
+        jobs: MutableList<Job>
     ) {
-        runBlocking { postAsync(event, channel) }
-    }
-
-    /**
-     * Posts an event asynchronously to a specific or default channel.
-     *
-     * This function dispatches an event to the appropriate event handler based on the event's class and the specified channel.
-     * If no handler is found for the given event type and channel, the event is silently ignored.
-     *
-     * This is a suspend function, meaning it can be safely called within coroutines and may suspend execution if necessary.
-     *
-     * *Note: If there is a sticky event previously posted to the same channel, the sticky event will be cleared after posting.*
-     *
-     * @param event The event to be posted. Must be a non-null object.
-     * @param channel The channel to post the event to. Defaults to [DefaultChannelFactory.DEFAULT_CHANNEL] if not specified.
-     * @param T The type of the event being posted. Must be a non-null class.
-     *
-     * @throws ClassCastException if the retrieved handler is not of the correct type [EventHandler<T>]
-     *
-     * Example:
-     * ```
-     * // Assuming you have an event class MyEvent and a corresponding handler
-     * data class MyEvent(val message: String)
-     *
-     * // In a coroutine scope:
-     * launch {
-     *     postAsync(MyEvent("Hello!")) // Posts MyEvent to the default channel
-     *     postAsync(MyEvent("Hello from channel 2!"), "channel2") // Posts to channel2.
-     * }
-     * ```
-     */
-    suspend fun <T : Any> postAsync(
-        event: T,
-        channel: String = DefaultChannelFactory.DEFAULT_CHANNEL
-    ) {
-        val clazz = event::class
-        val handler = getHandler(clazz, channel) ?: return
-        (handler as EventHandler<T>).post(event)
-    }
-
-    /**
-     * Posts a sticky event to the specified channel.
-     *
-     * A sticky event is an event that is retained by the channel even after it has been posted.
-     * New subscribers will receive the last posted sticky event immediately upon subscription.
-     * If a new sticky event is posted to the channel, existing subscribers are also immediately notified.
-     *
-     * This function blocks the current thread until the sticky event is posted asynchronously.
-     *
-     *
-     * @param event The event to post. Must not be null.
-     * @param channel The channel to post the event to. Defaults to [DefaultChannelFactory.DEFAULT_CHANNEL].
-     * @param scope The coroutine scope used for launching the asynchronous operation. Defaults to a globally available UnconfinedTestDispatcher.
-     *              Note that the default `unconfinedScope` is suitable for testing, for production use, you will want to use a more appropriate scope.
-     * @throws IllegalArgumentException if the event is null.
-     * @see postStickyAsync
-     */
-    fun <T : Any> postSticky(
-        event: T,
-        channel: String = DefaultChannelFactory.DEFAULT_CHANNEL,
-        scope: CoroutineScope = unconfinedScope
-    ) {
-        runBlocking { postStickyAsync(event, channel) }
-    }
-
-    /**
-     * Posts a sticky event asynchronously to the specified channel.
-     *
-     * A sticky event remains available to new subscribers even if they subscribe after the event was posted.
-     * Only one sticky event of each type can be active per channel at any given time.
-     * Posting a new sticky event of the same type to the same channel will replace the previous one.
-     *
-     * @param event The event to be posted. Must be a non-null object.
-     * @param channel The channel to post the event to. Defaults to [DefaultChannelFactory.DEFAULT_CHANNEL].
-     *                Different channels allow for separate event streams.
-     * @throws IllegalArgumentException if the event is null.
-     * @throws IllegalStateException if a handler for the given event type and channel cannot be created or retrieved.
-     * @see EventHandler.postSticky
-     * @see DefaultChannelFactory.DEFAULT_CHANNEL
-     */
-    suspend fun <T : Any> postStickyAsync(
-        event: T,
-        channel: String = DefaultChannelFactory.DEFAULT_CHANNEL
-    ) {
-        val clazz = event::class
-        val handler = getOrCreateHandler(clazz, channel) as EventHandler<T>
-        handler.postSticky(event)
-    }
-
-    /**
-     * Clears a sticky event of the specified type from the specified channel.
-     *
-     * Sticky events are events that are retained after they are posted and are
-     * delivered to new subscribers who register after the event was initially posted.
-     * This function removes the sticky event from the event bus, ensuring that
-     * future subscribers will not receive this event.
-     *
-     * @param clazz The KClass representing the type of the event to clear.
-     *              This specifies the type of the sticky event to be removed.
-     * @param channel The channel from which to clear the sticky event.
-     *                Defaults to [DefaultChannelFactory.DEFAULT_CHANNEL] if not specified.
-     *                Channels allow for event separation and management within the event bus.
-     * @throws IllegalArgumentException if the provided clazz is null.
-     * @throws IllegalStateException if the internal handler is not found for the given class and channel
-     * @see getHandler
-     *
-     * Example Usage:
-     * ```kotlin
-     * // Clear a sticky event of type MyEvent from the default channel.
-     * clearStickyEvent(MyEvent::class)
-     *
-     * // Clear a sticky event of type UserLoggedInEvent from the "user-events" channel.
-     * clearStickyEvent(UserLoggedInEvent::class, "user-events")
-     * ```
-     */
-    fun clearStickyEvent(
-        clazz: KClass<*>,
-        channel: String = DefaultChannelFactory.DEFAULT_CHANNEL
-    ) {
-        val handler = getHandler(clazz, channel)
-        handler?.removeStickyEvent()
-    }
-
-    /**
-     * Sends a request with the given [event] and handles the [Response] asynchronously.
-     *
-     * This function sends a request synchronously using [runBlocking]. It internally uses the [requestAsync]
-     * function to perform the asynchronous operation and then blocks the current thread until the request
-     * is completed.
-     *
-     * @param T The type of the event being sent.
-     * @param E The type of the expected result in the response.
-     * @param event The event data to be sent as part of the request.
-     * @param channel The name of the channel to use for sending the request. Defaults to [DefaultChannelFactory.DEFAULT_CHANNEL].
-     * @param timeout The maximum duration to wait for the response before timing out. Defaults to 5 seconds.
-     * @param scope The coroutine scope to use for launching the request. Defaults to an unconfined scope ([unconfinedScope]).
-     * @param onResult A callback function that receives the result of the request.
-     *                 It will receive a [Response] object which can be:
-     *                  - `Response.Success<E>`: If a successful response is received.
-     *                  - `Response.Error`: If an error response is received.
-     *                  - `Response.Timeout`: If no response is received within the specified timeout.
-     *
-     * **Usage Example:**
-     * ```kotlin
-     * // Assuming you have a class called MyEvent and MyResponse and an instance of your bus called 'myBus'
-     * data class MyEvent(val id: Int)
-     * data class MyResponse(val sum: Int)
-     *
-     * @Subscribe
-     * fun handleRequest(event: Request<MyEvent, MyResponse>) {
-     *     // Process event and create a response with type MyResponse
-     *     val sum = event.data.id + 1
-     *     event.setResult(MyResponse(sum))
-     * }
-     *
-     * myBus.request<MyEvent, MyResponse>(MyEvent(1)) { response ->
-     *     when (response) {
-     *         is Response.Success -> println("Received response: ${response.data.sum}")
-     *         is Response.Error -> println("Received error: ${response.error}")
-     *         Response.Timeout -> println("Request timed out")
-     *     }
-     * }
-     * ```
-     *
-     * @see requestAsync
-     * @see Response
-     * @see DefaultChannelFactory
-     * @see unconfinedScope
-     */
-    fun <T : Any, E : Any> request(
-        event: T,
-        channel: String = DefaultChannelFactory.DEFAULT_CHANNEL,
-        timeout: Duration = 5.seconds,
-        scope: CoroutineScope = unconfinedScope,
-        onResult: (Response<E>) -> Unit,
-    ) {
-        runBlocking {
-            requestAsync(event, channel, timeout, onResult)
+        if (function.parameters.size != 2) {
+            throw IllegalArgumentException("Invalid number of parameters for @Subscribe method. Expected 1, got ${function.parameters.size}")
         }
-    }
-
-    /**
-     * Sends an asynchronous request and waits for a response.
-     *
-     * This function sends an event to a specified channel and then asynchronously
-     * waits for a corresponding response event with a matching correlation ID.
-     * The response is then delivered to the provided `onResult` callback.
-     *
-     * @param T The type of the request event data.
-     * @param E The type of the response event data.
-     * @param event The data payload of the request event to be sent.
-     * @param channel The channel to which the request event is sent and on which
-     *                the response is expected. Defaults to [DefaultChannelFactory.DEFAULT_CHANNEL].
-     * @param timeout The maximum duration to wait for a response before considering
-     *                the request as timed out. Defaults to 5 seconds.
-     * @param onResult A callback function that receives the result of the request.
-     *                 It will receive a [Response] object which can be:
-     *                  - `Response.Success<E>`: If a successful response is received.
-     *                  - `Response.Error`: If an error response is received.
-     *                  - `Response.Timeout`: If no response is received within the specified timeout.
-     *
-     *
-     * **Usage Example:**
-     * ```kotlin
-     * // Assuming you have a class called MyEvent and MyResponse and an instance of your bus called 'myBus'
-     * data class MyEvent(val id: Int)
-     * data class MyResponse(val sum: Int)
-     *
-     * @Subscribe
-     * fun handleRequest(event: Request<MyEvent, MyResponse>) {
-     *     // Process event and create a response with type MyResponse
-     *     val sum = event.data.id + 1
-     *     event.setResult(MyResponse(sum))
-     * }
-     *
-     * scope.launch {
-     *    myBus.requestAsync<MyEvent, MyResponse>(MyEvent(1)) { response ->
-     *        when (response) {
-     *            is Response.Success -> println("Received response: ${response.data.sum}")
-     *            is Response.Error -> println("Received error: ${response.error}")
-     *            Response.Timeout -> println("Request timed out")
-     *        }
-     *    }
-     * }
-     * ```
-     */
-    suspend fun <T : Any, E : Any> requestAsync(
-        event: T,
-        channel: String = DefaultChannelFactory.DEFAULT_CHANNEL,
-        timeout: Duration = 5.seconds,
-        onResult: (Response<E>) -> Unit,
-    ) {
-        val request = Request<T, E>(data = event, bus = this, channel = channel)
-        val responseClass: KClass<ResponseEvent<E>> =
-            ResponseEvent::class as KClass<ResponseEvent<E>>
-        val handler =
-            getOrCreateHandler<ResponseEvent<E>>(responseClass, channel)
-        val responseListenerJob: Deferred<ResponseEvent<E>> =
-            unconfinedScope.async {
-                handler.events.filter {
-                    it.correlationId == request.requestId
-                }.first()
-            }
-
-        yield()
-        post(request, channel)
-
-        val resultEvent = withTimeoutOrNull(timeout) {
-            responseListenerJob.await()
+        val parameters = function.parameters.filter { it.kind == KParameter.Kind.VALUE }
+        if (parameters.isEmpty()) {
+            throw IllegalArgumentException("Invalid @Subscribe method. No event parameter found.")
         }
-        if (resultEvent?.data != null) {
-            onResult(Response.Success(resultEvent.data))
-        } else if (resultEvent?.error != null) {
-            onResult(Response.Error(resultEvent.error))
+
+        val eventTypeParam = parameters[0]
+        val eventType = eventTypeParam.type.jvmErasure
+        val source = "${target::class.simpleName}.${function.name}"
+        val scope = when (annotation.scope) {
+            DispatcherTypes.Main -> mainScope
+            DispatcherTypes.Default -> defaultScope
+            DispatcherTypes.IO -> ioScope
+            DispatcherTypes.Unconfined -> unconfinedScope
+        }
+        val channel = if (annotation.channelFactory != DefaultChannelFactory::class) {
+            annotation.channelFactory.createInstance().createChannel(target)
         } else {
-            onResult(Response.Timeout)
+            annotation.channel
+        }
+        // Ensure it's a specific, non-internal type
+        if (eventType != Any::class && eventType != RequestWrapper::class && eventType != ResponseWrapper::class) {
+            val specificFlow = getFlow(eventType as KClass<Any>)
+            val job = scope.launch {
+                specificFlow.collect { event ->
+                    if (event.channel != channel) {
+                        return@collect
+                    }
+                    try {
+                        if (function.isSuspend) {
+                            if (function.javaMethod != null) {
+                                invokeSuspendFunction(function.javaMethod!!, target, event.data)
+                            } else {
+                                function.callSuspend(target, event.data)
+                            }
+                        } else {
+                            if (function.javaMethod != null) {
+                                function.javaMethod?.invoke(target, event.data)
+                            } else {
+                                function.call(target, event.data)
+                            }
+                        }
+                    } catch (e: Throwable) {
+                        logger?.e("Exception in event handler [$source]: $e")
+                    }
+                }
+            }
+            jobs.add(job)
+            logger?.i("Subscribed method ${function.name} on ${target::class.simpleName} to event type ${eventType.simpleName}")
+        } else {
+            logger?.w("Warning: @Subscribe method ${function.name} on ${target::class.simpleName} has invalid parameter type (Any or internal wrapper).")
         }
     }
 
-    /**
-     * Subscribes an object to receive events.
-     *
-     * This function registers an object (typically a class representing a subscriber)
-     * to receive events. It scans the object's methods for those annotated with `@Subscribe`
-     * and registers them to handle events of the specified types on the defined channels.
-     *
-     * **Requirements:**
-     *  - The provided `obj` must be a `KClass<*>` (Kotlin class object).
-     *  - Methods annotated with `@Subscribe` must have a valid signature (one parameter).
-     *
-     * **Behavior:**
-     *  - It first checks if the given class object is already registered. If it is, a warning
-     *    is logged, and the function returns without doing anything.
-     *  - If the class is not already registered, it iterates through all the declared methods
-     *    of the class.
-     *  - For each method, it checks if it's annotated with `@Subscribe`.
-     *  - If a method is annotated, it extracts information from the annotation:
-     *      - `channelFactory`: Specifies the factory class used to create the channel for the event.
-     *      - `scope`: Specifies the coroutine dispatcher on which the method should be executed.
-     *  - It creates a channel instance using the provided factory class.
-     *  - It validates the method signature to ensure it accepts exactly one argument.
-     *  - It determines the appropriate coroutine scope based on the `scope` specified in the annotation.
-     *  - It then registers the method to receive events of the specified type on the created channel.
-     *
-     * **Logging:**
-     *  - A warning is logged if an object is already registered.
-     *
-     * **Error Handling:**
-     *  - `IllegalArgumentException` is thrown if the provided object is not a `KClass<*>`.
-     *  - Any exception thrown by the subscribed method will be propagated by reflection.
-     *
-     * @param obj The class object (`KClass<*>`) to subscribe.
-     * @throws IllegalArgumentException if the provided object is not a `KClass<*>` or if the method contains more than one parameter.
-     */
-    fun subscribe(obj: Any) {
-        require(obj::class != KClass::class) { "Only class instances are allowed as arguments." }
-        if (objectHandlerMapping.containsKey(obj)) {
-            logger?.w("Object [${obj::class.simpleName}] is already registered in EventBus.")
-            return
+    /** Processes a method annotated with @RequestHandler */
+    private fun processRequestHandler(
+        target: Any,
+        function: KFunction<*>,
+        annotation: RequestHandler,
+        jobs: MutableList<Job>
+    ) {
+        if (function.parameters.size != 2) {
+            throw IllegalArgumentException("Invalid number of parameters for @Subscribe method. Expected 1, got ${function.parameters.size}")
         }
-        objectHandlerMapping[obj] = mutableListOf()
-        val clazz = obj::class
-        clazz.declaredMembers.forEach { method ->
-            val annotation = method.findAnnotation<Subscribe>() ?: return@forEach
-            var channel = annotation.channel
-            val factoryClass = annotation.channelFactory
-            if (factoryClass != DefaultChannelFactory::class) {
-                val factory = factoryClass.createInstance()
-                channel = factory.createChannel(obj)
-            }
-            val parameters = method.parameters.filter { it.kind == KParameter.Kind.VALUE }
-            if (parameters.size != 1) {
-                throw IllegalArgumentException("Method ${method.name} must have exactly one parameter.")
-            }
-            val classifier = parameters[0].type.classifier
-            if (classifier !is KClass<*>) {
-                throw IllegalArgumentException("Method ${method.name} parameter must be a class.")
-            }
-            val argType: KClass<*> = classifier
+        val parameters = function.parameters.filter { it.kind == KParameter.Kind.VALUE }
+        if (parameters.isEmpty()) {
+            throw IllegalArgumentException("Invalid @Subscribe method. No event parameter found.")
+        }
+
+        val requestTypeParam = parameters[0]
+        val requestType =
+            requestTypeParam.type.jvmErasure // KClass of the request (e.g., MyRequest::class)
+        val returnType =
+            function.returnType.jvmErasure // KClass of the response (e.g., MyResponse::class)
+
+        // Ensure it's a Request<*> type and returns a specific type
+        if (Request::class.java.isAssignableFrom(requestType.java)
+            && returnType != Unit::class && returnType != Any::class
+        ) {
+            val requestFlow =
+                getRequestFlow(requestType as KClass<Request<*>>) // Flow of RequestWrapper<R>
             val scope = when (annotation.scope) {
                 DispatcherTypes.Main -> mainScope
                 DispatcherTypes.Default -> defaultScope
                 DispatcherTypes.IO -> ioScope
                 DispatcherTypes.Unconfined -> unconfinedScope
             }
-            val source = "${clazz.simpleName}.${method.name}"
-            subscribe(
-                argType,
-                obj,
-                channel,
-                { event ->
-                    if (method.isSuspend) {
-                        scope.launch {
-                            try {
-                                if (method is KFunction<*> && method.javaMethod != null) {
-                                    invokeSuspendFunction(method.javaMethod!!, obj, event)
-                                } else {
-                                    method.callSuspend(obj, event)
-                                }
-                            } catch (e: Throwable) {
-                                logger?.e("Exception in event handler [$source]: $e")
-                            }
+            val source = "${target::class.simpleName}.${function.name}"
+            val channel = if (annotation.channelFactory != DefaultChannelFactory::class) {
+                annotation.channelFactory.createInstance().createChannel(target)
+            } else {
+                annotation.channel
+            }
+
+            // --- Register Request Handler ---
+            val map =
+                requestHandlers.computeIfAbsent(requestType) { ConcurrentHashMap<Any, MutableSet<String>>() }
+            map.computeIfAbsent(target) { mutableSetOf<String>() }.add(channel)
+            logger?.i(
+                "Registered method ${function.name} on ${target::class.simpleName} as " +
+                        "handler for request type ${requestType.simpleName} on channel $channel"
+            )
+
+            requestTargetTypeMappings.computeIfAbsent(target) { mutableListOf() }.add(requestType)
+
+            // --- Launch Collector for this Request Type ---
+            val job = scope.launch { // Use the provided scope for the collector
+                requestFlow.collect { requestWrapperUntyped ->
+                    // We receive RequestWrapper<*> here, need to ensure it's the correct type
+                    if (requestType.isInstance(requestWrapperUntyped.payload)) {
+                        if (requestWrapperUntyped.channel != channel) {
+                            return@collect
                         }
-                    } else {
+                        val requestWrapper =
+                            requestWrapperUntyped as RequestWrapper<Any> // Safe cast after check
+                        val requestId = requestWrapper.id
+
+                        // Find the deferred associated with this request ID
+                        val deferred = pendingRequests[requestId]
+                        if (deferred == null) {
+                            logger?.w("Warning: Received request ${requestType.simpleName} (ID: $requestId) but no pending request found. Maybe timed out?")
+                            return@collect // Ignore if no longer pending
+                        }
+
+                        var responseData: Any? = null
+                        var responseError: Throwable? = null
                         try {
-                            if (method is KFunction<*> && method.javaMethod != null) {
-                                method.javaMethod?.invoke(obj, event)
+                            // Call the actual handler function (suspend or regular)
+                            responseData = if (function.isSuspend) {
+
+                                if (function.javaMethod != null) {
+                                    invokeSuspendFunction(
+                                        function.javaMethod!!,
+                                        target,
+                                        requestWrapper.payload
+                                    )
+                                } else {
+                                    function.callSuspend(target, requestWrapper.payload)
+                                }
                             } else {
-                                method.call(obj, event)
+                                if (function.javaMethod != null) {
+                                    function.javaMethod?.invoke(target, requestWrapper.payload)
+                                } else {
+                                    function.call(target, requestWrapper.payload)
+                                }
                             }
-                        } catch (e: Throwable) {
-                            logger?.e("Exception in event handler [$source]: $e")
+                            // Basic check: Handler should return non-null for success
+                            if (responseData == null) {
+                                responseError =
+                                    IllegalStateException("Request handler ${function.name} returned null for ${requestType.simpleName} (ID: $requestId)")
+                            }
+
+                        } catch (e: Throwable) { // Catch any exception from the handler
+                            logger?.e("Error calling [$source]: ${e.message}")
+                            responseError = e
+                        }
+
+                        // Create the response wrapper
+                        val responseWrapper =
+                            ResponseWrapper(requestId, channel, responseData, responseError)
+
+                        // Complete the deferred to unblock the original request() call
+                        @Suppress("UNCHECKED_CAST")
+                        if ((deferred as CompletableDeferred<ResponseWrapper<Any>>).complete(
+                                responseWrapper
+                            ).not()
+                        ) {
+                            logger?.d("Request may have been completed by another handler.")
                         }
                     }
-                },
-                scope,
-                source
-            )
+                }
+            }
+            jobs.add(job) // Add collector job to the list for cancellation on unsubscribe
+
+        } else {
+            logger?.w("Warning: @RequestHandler method ${function.name} on ${target::class.simpleName} must accept a Request<R> parameter and return a specific type R (not Unit or Any).")
+        }
+    }
+
+    // region --- Post Methods ---
+
+    /**
+     * Posts an event to the event bus.
+     *
+     * This function attempts to emit an event to the flow associated with its class type.
+     * It handles internal wrapper types and manages sticky events based on the `removeSticky` flag.
+     *
+     * @param event The event to post. This can be any object.
+     * @param channel The channel to post the event to. Defaults to [DefaultChannel]. Currently unused, but reserved for future use.
+     *
+     * **Behavior:**
+     *
+     * - **Internal Wrapper Prevention:**  Prevents the direct posting of internal wrapper types (`RequestWrapper` and `ResponseWrapper`).
+     *   This ensures that these wrappers are only used internally by the request-response mechanism and not directly by external code.
+     *   If an attempt is made to post a wrapper, a warning is logged, and returned.
+     *
+     * - **Sticky Event Management:** Post will remove sticky event automatically.
+     */
+    fun post(event: Any, channel: String = DefaultChannel) {
+        runBlocking {
+            postImpl(event, channel)
         }
     }
 
     /**
-     * Unsubscribes all handlers associated with a given class object.
+     * Posts an event to a channel as a sticky message.
      *
-     * This function removes all registered handlers (functions) that were subscribed
-     * using a specific class as the target.
+     * A sticky message is a message that persists across multiple sessions or until explicitly removed.
+     * This function is a convenience wrapper around the `post` function, setting the `sticky` flag to `true`.
      *
-     * @param obj The KClass object representing the class whose associated handlers should be unsubscribed.
-     * @throws IllegalArgumentException if the provided argument is not a KClass object.
+     * @param event The event to be posted. This can be any object.
+     * @param channel The channel to post the event to. Defaults to `DefaultChannel`.
      */
-    fun unsubscribe(obj: Any) {
-        require(obj::class != KClass::class) { "Only class instances are allowed as arguments." }
-        val functions = objectHandlerMapping.remove(obj) ?: return
-        functions.forEach { function ->
-            unsubscribe(function.clazz, function.channel, function.id, function.scope)
+    fun postSticky(event: Any, channel: String = DefaultChannel) {
+        runBlocking {
+            postImpl(event, channel, false)
+        }
+    }
+
+    /**
+     * Attempts to post an event to a specific channel.
+     *
+     * This function is used to emit an event to a shared flow associated with its class type.
+     * It handles internal wrapper types, sticky events, and ensures that the event is emitted successfully.
+     *
+     * @param event The event to be posted. It must not be an internal wrapper type (RequestWrapper or ResponseWrapper).
+     * @param channel The channel to which the event belongs. Defaults to [DefaultChannel].
+     *                While the parameter is present, it's not directly utilized in this function's logic.
+     *                Its usage is implied to be managed within `getFlow()` method.
+     * @param removeSticky If true, the sticky event (if any) for this event type will be removed from the replay cache after a successful post. Defaults to true.
+     * @return True if the event was successfully posted, false otherwise.
+     *
+     * @throws IllegalStateException if the associated flow is not found for the event.
+     * @throws ClassCastException if trying to emit incorrect event type to the flow.
+     *
+     * @see RequestWrapper
+     * @see ResponseWrapper
+     * @see MutableSharedFlow.tryEmit
+     * @see MutableSharedFlow.resetReplayCache
+     */
+    fun tryPost(
+        event: Any,
+        channel: String = DefaultChannel,
+        removeSticky: Boolean = true
+    ): Boolean {
+        // Ensure we don't accidentally post internal wrappers
+        if (event is RequestWrapper<*> || event is ResponseWrapper<*>) {
+            logger?.w("Warning: Attempting to post internal wrapper type directly. Use request() method for requests.")
+            return false
+        }
+        // Find the flow for the specific event class and try emitting
+        val flow = getFlow(event::class)
+        if (flow.tryEmit(DataWrapper(event, channel))) {
+            if (removeSticky) {
+                flow.resetReplayCache()
+            }
+            return true
+        }
+        return false
+    }
+
+    /**
+     * Clears the sticky (replayed) events for a given event type.
+     *
+     * This function removes all previously emitted events from the replay cache of the
+     * `MutableSharedFlow` associated with the specified event type [clazz]. Subsequent
+     * subscribers will not receive any previously emitted events.  This effectively
+     * "clears" the sticky behavior of events of this type.
+     *
+     * **Note:** This only affects the replay cache. Any currently active subscribers
+     * that have already received the events will still have those events.  This only
+     * prevents *new* subscribers from receiving the replayed events.
+     *
+     * @param T The type of the event. Must be a non-nullable type.
+     * @param clazz The KClass representing the type of the event to clear.
+     * @throws IllegalArgumentException if a flow for the given class is not registered.
+     */
+    fun <T : Any> clearStickyEvent(clazz: KClass<T>) {
+        val flow = getFlow(clazz)
+        flow.resetReplayCache()
+    }
+
+    /**
+     * Posts an event asynchronously to the specified channel (or the default channel).
+     *
+     * This function is used to emit an event to a flow. It handles the emission and resets the replay cache of the flow after the emission.
+     * It also includes a check to prevent direct posting of internal wrapper types like `RequestWrapper` and `ResponseWrapper`.
+     *
+     * @param event The event to post. Can be any object, except instances of `RequestWrapper` or `ResponseWrapper`.
+     * @param channel The channel to post the event to. Defaults to [DefaultChannel].
+     *
+     * @throws IllegalArgumentException If the provided `event` is an instance of `RequestWrapper` or `ResponseWrapper`. In such case, it's recommended to use the `request()` method.
+     *
+     * @see getFlow
+     * @see DefaultChannel
+     * @see RequestWrapper
+     * @see ResponseWrapper
+     */
+    suspend fun postAsync(
+        event: Any,
+        channel: String = DefaultChannel
+    ) {
+        postImpl(event, channel)
+    }
+
+    // endregion
+
+    // region --- Request/Response Methods ---
+
+    /**
+     * Executes a synchronous request and returns the response.
+     *
+     * This function takes a [Request] object and an optional timeout duration. It
+     * internally uses [requestAsync] to perform the request asynchronously, but
+     * blocks the current thread until the result is available.
+     *
+     * @param R The type of the expected response.
+     * @param request The [Request] object to be executed.
+     * @param timeout The maximum duration to wait for the request to complete.
+     *                Defaults to 5 seconds.
+     * @return The response object of type [R].
+     * @throws NoRequestHandlerException If no handler is registered for the given request type.
+     * @throws RequestTimeoutException If the request times out before a response is received.
+     * @throws RequestException If the request handler throws an error or null data.
+     *
+     * @sample
+     * ```kotlin
+     * data class MyRequest(val data: String) : Request<MyResponse>
+     * data class MyResponse(val result: String)
+     *      * // Example usage:
+     * val myRequest = MyRequest("some data")
+     * try {
+     *     val response = request(myRequest, 10.seconds)
+     *     println("Received response: ${response.result}")
+     * } catch (e: NoRequestHandlerException) {
+     *     println("Error: No handler found for MyRequest")
+     * } catch (e: RequestTimeoutException) {
+     *     println("Error: Request timed out")
+     * } catch (e: RequestException) {
+     *    println("Error: Request failed: ${e.cause}")
+     * }
+     * ```
+     */
+    inline fun <reified R : Any> request(
+        request: Request<R>,
+        channel: String = DefaultChannel,
+        timeout: Duration = 5.seconds // Default 5 second timeout
+    ): R {
+        runBlocking {
+            requestAsync(request, channel, timeout)
+        }.also {
+            return it
+        }
+    }
+
+    /**
+     * Sends a request asynchronously and waits for a response, with a timeout.
+     *
+     * This function handles the process of sending a request, storing the associated
+     * deferred object to track the response, and waiting for the response with a specified timeout.
+     * It also manages error handling for scenarios like no handler being registered, request timeouts,
+     * and errors returned by the request handler.
+     *
+     * @param R The type of the response data.
+     * @param request The request to send.
+     * @param timeout The maximum duration to wait for a response. Defaults to 5 seconds.
+     * @return The response data of type [R].
+     * @throws NoRequestHandlerException If no handler is registered for the given request type.
+     * @throws RequestTimeoutException If the request times out before a response is received.
+     * @throws RequestException If the request handler throws an error or null data.
+     *
+     * @sample
+     * ```kotlin
+     * data class MyRequest(val data: String) : Request<MyResponse>
+     * data class MyResponse(val result: String)
+     *
+     * // Example usage:
+     * val myRequest = MyRequest("some data")
+     *
+     * scope.launch {
+     *      try {
+     *          val response = requestAsync(myRequest, 10.seconds)
+     *          println("Received response: ${response.result}")
+     *      } catch (e: NoRequestHandlerException) {
+     *          println("Error: No handler found for MyRequest")
+     *      } catch (e: RequestTimeoutException) {
+     *          println("Error: Request timed out")
+     *      } catch (e: RequestException) {
+     *         println("Error: Request failed: ${e.cause}")
+     *      }
+     * }
+     * ```
+     */
+    suspend inline fun <reified R : Any> requestAsync(
+        request: Request<R>,
+        channel: String = DefaultChannel,
+        timeout: Duration = 5.seconds // Default 5 second timeout
+    ): R {
+        val requestType = request::class
+        // Check if a handler exists *before* sending
+        if (!requestHandlers.containsKey(requestType)) {
+            throw NoRequestHandlerException("No handler registered for request type ${requestType.simpleName}")
+        }
+
+        val requestId = UUID.randomUUID().toString()
+        val deferred = CompletableDeferred<ResponseWrapper<R>>()
+
+        // Store the deferred before posting the request
+        @Suppress("UNCHECKED_CAST") // Cast necessary due to heterogeneous map value type
+        pendingRequests[requestId] = deferred as CompletableDeferred<ResponseWrapper<*>>
+
+        val requestWrapper = RequestWrapper(requestId, channel, request)
+
+        try {
+            // Post the wrapped request to the flow corresponding to the *original* request payload type
+            getRequestFlow(requestType).emit(requestWrapper) // Handler listens on this flow
+
+            // Wait for the response with timeout
+            val responseWrapper = withTimeoutOrNull(timeout) {
+                deferred.await() // Suspend until the deferred is completed by the handler logic
+            }
+
+            if (responseWrapper == null) {
+                throw RequestTimeoutException("Request timed out after $timeout for ${requestType.simpleName} (ID: $requestId)")
+            }
+
+            // Process the response
+            if (responseWrapper.error != null) {
+                throw RequestException(
+                    "Request handler failed for ${requestType.simpleName} (ID: $requestId)",
+                    responseWrapper.error
+                )
+            }
+
+            // Should always have data if error is null, but check for safety
+            return responseWrapper.data
+                ?: throw RequestException("Handler for ${requestType.simpleName} returned null data (ID: $requestId)")
+
+        } finally {
+            // Always remove the pending request entry
+            pendingRequests.remove(requestId)
         }
     }
     // endregion
+
+    // region --- Registration Methods ---
+
+    /**
+     * Subscribes the given target object to receive events and handle requests.
+     *
+     * This function examines the target object for methods annotated with `@Subscribe` or `@RequestHandler`.
+     * For each such method, it creates and registers a corresponding subscription or request handler.
+     *
+     * **Duplicate Subscriptions:**
+     * If a target is already subscribed, a warning is logged, and the function returns without creating
+     * duplicate subscriptions. It is recommended to call `unsubscribe` before subscribing the same target again.
+     *
+     * @param target The object to subscribe. This object will have its methods inspected for `@Subscribe` and `@RequestHandler` annotations.
+     * @throws IllegalArgumentException if the target is null.
+     * @throws IllegalStateException if `processSubscriber` or `processRequestHandler` fails to properly process the functions
+     * @see Subscribe
+     * @see RequestHandler
+     * @see unsubscribe
+     */
+    fun subscribe(target: Any) {
+        if (subscriptions.containsKey(target)) {
+            logger?.w("Warning: Target ${target::class.simpleName} is already subscribed. Unsubscribe first to avoid duplicate handlers/subscriptions.")
+            return
+        }
+
+        val targetClass = target::class
+        val jobs = subscriptions.computeIfAbsent(target) { mutableListOf() }
+
+        targetClass.memberFunctions.forEach { function ->
+            // Handle @Subscribe annotations (Broadcast Events)
+            function.findAnnotation<Subscribe>()?.let {
+                processSubscriber(target, function, it, jobs)
+            }
+
+            // Handle @RequestHandler annotations (Request/Response)
+            function.findAnnotation<RequestHandler>()?.let {
+                processRequestHandler(target, function, it, jobs)
+            }
+        }
+        // If no jobs were added for a new target, remove the empty list entry
+        if (jobs.isEmpty() && subscriptions[target]?.isEmpty() == true) {
+            subscriptions.remove(target)
+        }
+    }
+
+    /**
+     * Unsubscribes an object instance, cancelling all its active collectors
+     * for both @Subscribe and @RequestHandler methods.
+     * Also removes its handlers from the central registry.
+     *
+     * @param target The object instance to unsubscribe.
+     */
+    fun unsubscribe(target: Any) {
+        // 1. Cancel collector jobs
+        subscriptions.remove(target)?.let { jobs ->
+            jobs.forEach { job ->
+                if (job.isActive) {
+                    job.cancel()
+                }
+            }
+            logger?.i("Unsubscribed target ${target::class.simpleName}. Cancelled ${jobs.size} collector job(s).")
+        }
+            ?: logger?.w("Target ${target::class.simpleName} was not found in subscriptions map for job cancellation.")
+
+        // 2. Remove registered request handlers associated with this target
+        requestTargetTypeMappings.remove(target)?.forEach { requestType ->
+            requestHandlers[requestType]?.remove(target)
+            requestHandlers.computeIfPresent(requestType) { type, list -> if (list.isEmpty()) null else list }
+        }
+    }
+    // endregion
+
+    fun <T : Any> getRequestHandlerCount(requestType: KClass<T>): Int {
+        return requestHandlers[requestType]?.size ?: 0
+    }
 }
