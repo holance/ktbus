@@ -40,7 +40,7 @@ enum class DispatcherTypes {
 }
 
 data class KtBusConfig(
-    val bufferCapacity: Int = 10,
+    val bufferCapacity: Int = 100,
     val onBufferOverflow: BufferOverflow = BufferOverflow.SUSPEND
 )
 
@@ -100,10 +100,10 @@ class KtBus(val config: KtBusConfig = KtBusConfig()) {
     private val requestFlows =
         ConcurrentHashMap<KClass<*>, MutableSharedFlow<RequestWrapper<*>>>()
 
-    // Stores active request handlers. Maps Request KClass to the handler function and its target instance.
-    // Note: This simple map allows only one handler per request type globally.
-    // A more complex structure could allow multiple handlers if needed (e.g., List<Pair<Any, KFunction<*>>>)
-    val requestHandlers = ConcurrentHashMap<KClass<*>, Pair<Any, KFunction<*>>>()
+    // Stores active request handlers.
+    val requestHandlers =
+        ConcurrentHashMap<KClass<*>, ConcurrentHashMap<Any, MutableSet<String>>>()
+    private val requestTargetTypeMappings = ConcurrentHashMap<Any, MutableList<KClass<*>>>()
 
     // Stores pending requests waiting for a response. Maps Request ID to its CompletableDeferred.
     val pendingRequests =
@@ -247,17 +247,6 @@ class KtBus(val config: KtBusConfig = KtBusConfig()) {
         if (Request::class.java.isAssignableFrom(requestType.java)
             && returnType != Unit::class && returnType != Any::class
         ) {
-
-            // --- Register the Handler ---
-            // Note: Overwrites any existing handler for this request type!
-            val existingHandler = requestHandlers.put(requestType, target to function)
-            if (existingHandler != null) {
-                logger?.w("Warning: Replacing existing request handler for ${requestType.simpleName} with method ${function.name} on ${target::class.simpleName}")
-            } else {
-                logger?.i("Registered method ${function.name} on ${target::class.simpleName} as handler for request type ${requestType.simpleName}")
-            }
-
-            // --- Launch Collector for this Request Type ---
             val requestFlow =
                 getRequestFlow(requestType as KClass<Request<*>>) // Flow of RequestWrapper<R>
             val scope = when (annotation.scope) {
@@ -273,6 +262,18 @@ class KtBus(val config: KtBusConfig = KtBusConfig()) {
                 annotation.channel
             }
 
+            // --- Register Request Handler ---
+            val map =
+                requestHandlers.computeIfAbsent(requestType) { ConcurrentHashMap<Any, MutableSet<String>>() }
+            map.computeIfAbsent(target) { mutableSetOf<String>() }.add(channel)
+            logger?.i(
+                "Registered method ${function.name} on ${target::class.simpleName} as " +
+                        "handler for request type ${requestType.simpleName} on channel $channel"
+            )
+
+            requestTargetTypeMappings.computeIfAbsent(target) { mutableListOf() }.add(requestType)
+
+            // --- Launch Collector for this Request Type ---
             val job = scope.launch { // Use the provided scope for the collector
                 requestFlow.collect { requestWrapperUntyped ->
                     // We receive RequestWrapper<*> here, need to ensure it's the correct type
@@ -330,9 +331,12 @@ class KtBus(val config: KtBusConfig = KtBusConfig()) {
 
                         // Complete the deferred to unblock the original request() call
                         @Suppress("UNCHECKED_CAST")
-                        (deferred as CompletableDeferred<ResponseWrapper<Any>>).complete(
-                            responseWrapper
-                        )
+                        if ((deferred as CompletableDeferred<ResponseWrapper<Any>>).complete(
+                                responseWrapper
+                            ).not()
+                        ) {
+                            logger?.d("Request may have been completed by another handler.")
+                        }
                     }
                 }
             }
@@ -485,7 +489,9 @@ class KtBus(val config: KtBusConfig = KtBusConfig()) {
      * @param timeout The maximum duration to wait for the request to complete.
      *                Defaults to 5 seconds.
      * @return The response object of type [R].
-     * @throws Exception if the request fails or times out.
+     * @throws NoRequestHandlerException If no handler is registered for the given request type.
+     * @throws RequestTimeoutException If the request times out before a response is received.
+     * @throws RequestException If the request handler returns an error or null data.
      *
      * @sample
      * ```kotlin
@@ -672,11 +678,14 @@ class KtBus(val config: KtBusConfig = KtBusConfig()) {
             ?: logger?.w("Target ${target::class.simpleName} was not found in subscriptions map for job cancellation.")
 
         // 2. Remove registered request handlers associated with this target
-        val handlersToRemove = requestHandlers.filter { it.value.first == target }.keys
-        if (handlersToRemove.isNotEmpty()) {
-            handlersToRemove.forEach { requestHandlers.remove(it) }
-            logger?.i("Removed ${handlersToRemove.size} request handler(s) associated with ${target::class.simpleName}.")
+        requestTargetTypeMappings.remove(target)?.forEach { requestType ->
+            requestHandlers[requestType]?.remove(target)
+            requestHandlers.computeIfPresent(requestType) { type, list -> if (list.isEmpty()) null else list }
         }
     }
     // endregion
+
+    fun <T : Any> getRequestHandlerCount(requestType: KClass<T>): Int {
+        return requestHandlers[requestType]?.size ?: 0
+    }
 }

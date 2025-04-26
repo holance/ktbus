@@ -1,6 +1,7 @@
 package org.holance.ktbus
 
-import kotlin.test.*
+import kotlin.test.Test
+import kotlin.test.assertEquals
 
 class KtBusExceptionTests {
     val bus = KtBus.getDefault()
