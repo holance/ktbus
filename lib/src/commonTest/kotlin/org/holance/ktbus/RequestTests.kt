@@ -13,10 +13,9 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.seconds
-
-data class Add1Request(val value: Int) : Request<Resp>
-data class Multiply2Request(val value: Int) : Request<Resp>
-data class Multiply3Request(val value: Int) : Request<Resp>
+data class Add1Request(val value: Int)
+data class Multiply2Request(val value: Int)
+data class Multiply3Request(val value: Int)
 data class Resp(val value: Int)
 
 class KtBusRequestTests {
@@ -29,9 +28,9 @@ class KtBusRequestTests {
         test.setup()
 
         for (i in 0 until iteration) {
-            var result = bus.request(Add1Request(i))
+            var result = bus.request<Add1Request, Resp>(Add1Request(i))
             assertEquals(i + 1, result.value)
-            result = bus.request(Multiply2Request(i))
+            result = bus.request<Multiply2Request, Resp>(Multiply2Request(i))
             assertEquals(i * 2, result.value)
         }
         test.tearDown()
@@ -48,12 +47,12 @@ class KtBusRequestTests {
 
         for (i in 0 until iteration) {
             scope.launch {
-                val result = bus.requestAsync(Add1Request(i))
+                val result = bus.requestAsync<Add1Request, Resp>(Add1Request(i))
                 assertEquals(i + 1, result.value)
                 result1.add(result.value)
             }
             scope.launch {
-                val result = bus.requestAsync(Multiply2Request(i))
+                val result = bus.requestAsync<Multiply2Request, Resp>(Multiply2Request(i))
                 assertEquals(i * 2, result.value)
                 result2.add(result.value)
             }
@@ -79,7 +78,7 @@ class KtBusRequestTests {
         val test = TestClass()
         test.setup()
         assertFailsWith(RequestTimeoutException::class) {
-            bus.request(Multiply3Request(10), timeout = 1.seconds)
+            bus.request<Multiply3Request, Resp>(Multiply3Request(10), timeout = 1.seconds)
         }
         test.tearDown()
     }
@@ -87,7 +86,7 @@ class KtBusRequestTests {
     @Test
     fun requestTestNoHandler() {
         assertFailsWith(NoRequestHandlerException::class) {
-            bus.request(Multiply3Request(10))
+            bus.request<Multiply3Request, Resp>(Multiply3Request(10))
         }
     }
 
@@ -98,9 +97,9 @@ class KtBusRequestTests {
         test.setup()
 
         for (i in 0 until iteration) {
-            var result = bus.request(Add1Request(i))
+            var result = bus.request<Add1Request, Resp>(Add1Request(i))
             assertEquals(i + 1, result.value)
-            result = bus.request(Add1Request(i), channel = "test")
+            result = bus.request<Add1Request, Resp>(Add1Request(i), channel = "test")
             assertEquals(i * 3, result.value)
         }
         test.tearDown()
@@ -116,12 +115,12 @@ class KtBusRequestTests {
         val result2 = ConcurrentSkipListSet<Int>()
         for (i in 0 until iteration) {
             scope.launch {
-                var result = bus.requestAsync(Add1Request(i))
+                var result = bus.requestAsync<Add1Request, Resp>(Add1Request(i))
                 assertEquals(i + 1, result.value)
                 result1.add(result.value)
             }
             scope.launch {
-                val result = bus.requestAsync(Add1Request(i), channel = "test")
+                val result = bus.requestAsync<Add1Request, Resp>(Add1Request(i), channel = "test")
                 assertEquals(i * 3, result.value)
                 result2.add(result.value)
             }

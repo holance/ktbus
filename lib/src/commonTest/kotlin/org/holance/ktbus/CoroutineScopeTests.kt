@@ -1,14 +1,14 @@
 package org.holance.ktbus
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
-import kotlinx.coroutines.yield
+import java.util.concurrent.ConcurrentSkipListSet
 import kotlin.random.Random
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
+import kotlin.time.Duration.Companion.seconds
 
 class CoroutineScopeTests {
     val bus = KtBus.getDefault()
@@ -22,21 +22,19 @@ class CoroutineScopeTests {
             bus.post(Event1(i))
         }
         runBlocking {
-            val success = withTimeoutOrNull(10000) {
+            val result = withTimeoutOrNull(10.seconds) {
                 while (tests.any { it.event1Result.size < iteration }) {
                     delay(10)
-                    yield()
                 }
                 true
-            } == true
-            assertTrue(success)
+            }
+            assertNotNull(result)
         }
         tests.forEach { test ->
             assertEquals(iteration, test.event1Result.size)
             assertEquals(iteration, test.event11Result.size)
-            test.event1Result.sortBy { it.value }
             for (i in 0 until iteration) {
-                assertEquals(i, test.event1Result[i].value)
+                assertTrue(test.event1Result.contains(i * 2))
                 assertEquals(i, test.event11Result[i].value)
             }
         }
@@ -52,9 +50,8 @@ class CoroutineScopeTests {
     private class TestClass {
         val bus = KtBus.getDefault()
 
-        val event1Result = mutableListOf<Event1>()
+        val event1Result = ConcurrentSkipListSet<Int>()
         val event11Result = mutableListOf<Event1>()
-        val mutex = Mutex()
 
         fun setup() {
             bus.subscribe(this)
@@ -68,10 +65,8 @@ class CoroutineScopeTests {
 
         @Subscribe(scope = DispatcherTypes.IO)
         suspend fun onEvent1(event: Event1) {
-            delay(Random.nextLong(1, 10))
-            mutex.withLock {
-                event1Result.add(event)
-            }
+            delay(Random.nextLong(1, 100))
+            event1Result.add(event.value * 2)
         }
 
         @Subscribe(scope = DispatcherTypes.Default)
