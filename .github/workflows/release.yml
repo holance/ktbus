@@ -2,10 +2,7 @@ name: Release
 
 on:
     release:
-      # Trigger only when a release is published
-      # Use 'created' if you want it to run as soon as the release draft/tag is made
-      # Use 'prereleased' if you want to include pre-releases
-      types: [published]
+      types: [created]
 
 jobs:
   build:
@@ -20,8 +17,9 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v4 
         with:
+          ref: ${{ github.event.release.tag_name }}
           fetch-depth: 0
 
       - name: Set up JDK 17
