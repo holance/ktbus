@@ -93,7 +93,7 @@ n2 -- Response --> n1
 
 ```kotlin
 
-data class ComputeSquareRequest(val value: Int) : Request<ComputeSquareResult>
+data class ComputeSquareRequest(val value: Int)
 data class ComputeSquareResult(val value: Int)
 
 class MathClass {
@@ -113,7 +113,7 @@ class MathClass {
 val bus = KtBus.getDefault()
 
 try {
-    val result = bus.request(ComputeSquareRequest(5))    
+    val result = bus.request<ComputeSquareRequest, ComputeSquareResult>(ComputeSquareRequest(5))    
     assert(result.value == 25)
 }
 catch (e: RequestException) {
