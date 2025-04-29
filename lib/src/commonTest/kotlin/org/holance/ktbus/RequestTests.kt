@@ -12,6 +12,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
+import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
 data class Add1Request(val value: Int)
 data class Multiply2Request(val value: Int)
@@ -59,7 +60,7 @@ class KtBusRequestTests {
         }
         runBlocking {
             val result = withTimeoutOrNull<Boolean>(20.seconds) {
-                while (result1.size < iteration || result2.size < iteration) {
+                while (result2.size < iteration) {
                     delay(10)
                 }
                 return@withTimeoutOrNull true
@@ -161,7 +162,8 @@ class KtBusRequestTests {
         }
 
         @RequestHandler(scope = DispatcherTypes.IO)
-        fun onEvent2(event: Multiply2Request): Resp {
+        suspend fun onEvent2(event: Multiply2Request): Resp {
+            delay(10.milliseconds)
             return Resp(event.value * 2)
         }
 

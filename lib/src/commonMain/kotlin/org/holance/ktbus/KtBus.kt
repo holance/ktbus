@@ -13,11 +13,8 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeoutOrNull
-import java.lang.reflect.Method
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
-import kotlin.coroutines.resumeWithException
-import kotlin.coroutines.suspendCoroutine
 import kotlin.reflect.KClass
 import kotlin.reflect.KFunction
 import kotlin.reflect.KParameter
@@ -25,7 +22,7 @@ import kotlin.reflect.full.callSuspend
 import kotlin.reflect.full.createInstance
 import kotlin.reflect.full.findAnnotation
 import kotlin.reflect.full.memberFunctions
-import kotlin.reflect.jvm.javaMethod
+import kotlin.reflect.jvm.isAccessible
 import kotlin.reflect.jvm.jvmErasure
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.seconds
@@ -180,20 +177,6 @@ class KtBus(val config: KtBusConfig = KtBusConfig()) {
         }
     }
 
-    private suspend fun invokeSuspendFunction(
-        method: Method,
-        obj: Any,
-        event: Any
-    ) {
-        suspendCoroutine<Unit> {
-            try {
-                method.invoke(obj, event, it)
-            } catch (e: Exception) {
-                it.resumeWithException(e)
-            }
-        }
-    }
-
     /** Processes a method annotated with @Subscribe */
     private fun processSubscriber(
         target: Any,
@@ -233,18 +216,11 @@ class KtBus(val config: KtBusConfig = KtBusConfig()) {
                         return@collect
                     }
                     try {
+                        function.isAccessible = true
                         if (function.isSuspend) {
-                            if (function.javaMethod != null) {
-                                invokeSuspendFunction(function.javaMethod!!, target, event.data)
-                            } else {
-                                function.callSuspend(target, event.data)
-                            }
+                            function.callSuspend(target, event.data)
                         } else {
-                            if (function.javaMethod != null) {
-                                function.javaMethod?.invoke(target, event.data)
-                            } else {
-                                function.call(target, event.data)
-                            }
+                            function.call(target, event.data)
                         }
                     } catch (e: Throwable) {
                         logger?.e("Exception in event handler [$source]: $e")
@@ -330,25 +306,13 @@ class KtBus(val config: KtBusConfig = KtBusConfig()) {
 
                     var responseData: Any? = null
                     var responseError: Throwable? = null
+                    function.isAccessible = true
                     try {
                         // Call the actual handler function (suspend or regular)
                         responseData = if (function.isSuspend) {
-
-                            if (function.javaMethod != null) {
-                                invokeSuspendFunction(
-                                    function.javaMethod!!,
-                                    target,
-                                    requestWrapper.payload
-                                )
-                            } else {
-                                function.callSuspend(target, requestWrapper.payload)
-                            }
+                            function.callSuspend(target, requestWrapper.payload)
                         } else {
-                            if (function.javaMethod != null) {
-                                function.javaMethod?.invoke(target, requestWrapper.payload)
-                            } else {
-                                function.call(target, requestWrapper.payload)
-                            }
+                            function.call(target, requestWrapper.payload)
                         }
                         // Basic check: Handler should return non-null for success
                         if (responseData == null) {
@@ -395,7 +359,7 @@ class KtBus(val config: KtBusConfig = KtBusConfig()) {
      *
      * - **Sticky Event Management:** Post will remove sticky event automatically.
      *
-     * @sample org.holance.ktbus.samples.PostSamples
+     * @sample org.holance.samples.ktbus.PostSamples
      */
     fun post(event: Any, channel: String = DefaultChannel) {
         runBlocking {
@@ -488,7 +452,7 @@ class KtBus(val config: KtBusConfig = KtBusConfig()) {
      * @throws IllegalArgumentException if the event is an internal wrapper type (RequestWrapper or ResponseWrapper).
      * @throws IllegalArgumentException if the event is a generic type.
      *
-     * @sample org.holance.ktbus.samples.PostSamples
+     * @sample org.holance.samples.ktbus.PostSamples
      */
     suspend fun postAsync(
         event: Any,
@@ -519,7 +483,7 @@ class KtBus(val config: KtBusConfig = KtBusConfig()) {
      * @throws RequestException If the request handler encounters an error or returns null data.
      * @throws IllegalArgumentException if the event is  a unit or any type.
      * @throws IllegalArgumentException if the event is a generic type.
-     * @sample org.holance.ktbus.samples.RequestSample.sendRequest
+     * @sample org.holance.samples.ktbus.RequestSample.sendRequest
      */
     inline fun <reified T : Any, reified R : Any> request(
         request: T,
@@ -552,7 +516,7 @@ class KtBus(val config: KtBusConfig = KtBusConfig()) {
      * @throws IllegalArgumentException if the request or response type is a unit or any type.
      * @throws IllegalArgumentException if the request or response type is a generic type.
      *
-     * @sample org.holance.ktbus.samples.RequestSample.sendRequestAsync
+     * @sample org.holance.samples.ktbus.RequestSample.sendRequestAsync
      *
      */
     suspend inline fun <reified T : Any, reified R : Any> requestAsync(
@@ -633,7 +597,7 @@ class KtBus(val config: KtBusConfig = KtBusConfig()) {
      * @see Subscribe
      * @see RequestHandler
      * @see unsubscribe
-     * @sample org.holance.ktbus.samples.SubscribeSample
+     * @sample org.holance.samples.ktbus.SubscribeSample
      */
     fun subscribe(target: Any) {
         if (subscriptions.containsKey(target)) {
@@ -667,7 +631,7 @@ class KtBus(val config: KtBusConfig = KtBusConfig()) {
      * Also removes its handlers from the central registry.
      *
      * @param target The object instance to unsubscribe.
-     * @sample org.holance.ktbus.samples.SubscribeSample
+     * @sample org.holance.samples.ktbus.SubscribeSample
      */
     fun unsubscribe(target: Any) {
         // 1. Cancel collector jobs
