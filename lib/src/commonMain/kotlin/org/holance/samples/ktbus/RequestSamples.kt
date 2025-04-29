@@ -1,4 +1,4 @@
-package org.holance.ktbus.samples
+package org.holance.samples.ktbus
 
 import org.holance.ktbus.KtBus
 import org.holance.ktbus.RequestHandler
