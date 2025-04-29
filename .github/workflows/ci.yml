@@ -2,13 +2,13 @@ name: Build and Test
 
 on:
   push:
-    branches: [ release-*, develop* ]
+    branches: [ release/*, develop*, hotfix/* ]
     paths-ignore:
       - '**.md'
       - 'LICENSE'
       - '.gitignore'
   pull_request:
-    branches: [ release-*, develop* ]
+    branches: [ release/*, develop*, hotfix/* ]
     paths-ignore:
       - '**.md'
       - 'LICENSE'
