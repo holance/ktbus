@@ -601,14 +601,25 @@ class KtBus(val config: KtBusConfig = KtBusConfig()) {
      */
     fun subscribe(target: Any) {
         if (subscriptions.containsKey(target)) {
-            logger?.w("Warning: Target ${target::class.simpleName} is already subscribed. Unsubscribe first to avoid duplicate handlers/subscriptions.")
+            logger?.w(
+                "Warning: Target ${target::class.simpleName} is already subscribed. Unsubscribe first to avoid duplicate handlers/subscriptions."
+            )
             return
         }
 
         val targetClass = target::class
         val jobs = subscriptions.computeIfAbsent(target) { mutableListOf() }
 
-        targetClass.memberFunctions.forEach { function ->
+        subscribeRecursive(target, targetClass, jobs)
+
+        // If no jobs were added for a new target, remove the empty list entry
+        if (jobs.isEmpty() && subscriptions[target]?.isEmpty() == true) {
+            subscriptions.remove(target)
+        }
+    }
+
+    private fun subscribeRecursive(target: Any, type: KClass<*>, jobs: MutableList<Job>) {
+        type.memberFunctions.forEach { function ->
             // Handle @Subscribe annotations (Broadcast Events)
             function.findAnnotation<Subscribe>()?.let {
                 processSubscriber(target, function, it, jobs)
@@ -619,9 +630,8 @@ class KtBus(val config: KtBusConfig = KtBusConfig()) {
                 processRequestHandler(target, function, it, jobs)
             }
         }
-        // If no jobs were added for a new target, remove the empty list entry
-        if (jobs.isEmpty() && subscriptions[target]?.isEmpty() == true) {
-            subscriptions.remove(target)
+        type.superclasses.forEach {
+            subscribeRecursive(target, it, jobs)
         }
     }
 
