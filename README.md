@@ -98,12 +98,15 @@ data class ComputeSquareResult(val value: Int)
 
 class MathClass {
     val bus = KtBus.getDefault()
+
     fun setup() {
         bus.subscribe(this)
     }
+
     fun tearDown() {
         bus.unsubscribe(this)
     }
+
     @RequestHandler
     fun computeSquare(event: ComputeSquareRequest) : ComputeSquareResult {
         return ComputeSquareResult(event.value * event.value)
